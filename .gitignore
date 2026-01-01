@@ -1,0 +1,7 @@
+*.arrow
+venv/
+*~
+*.swp
+*.png
+__pycache__
+*.wav

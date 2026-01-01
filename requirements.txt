@@ -1,0 +1,9 @@
+numpy
+scipy
+pyside6
+polars
+superqt
+watchdog
+pyarrow
+natsort
+pyopengl
