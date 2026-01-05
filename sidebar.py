@@ -327,7 +327,7 @@ class Sidebar(QWidget):
             self.folder_button.setText("Choose Wav File Folder")
 
     def create_arrow_files(self):
-        self.arrow_button.start_loading()
+        #self.arrow_button.start_loading()
         wav_files = helpers.get_wav_files(self.folder.absolutePath())
         counter = 0
         self.layerwidget.setRange((1,len(wav_files)))
@@ -336,7 +336,7 @@ class Sidebar(QWidget):
             helpers.create_arrow_from_wav(file,counter,self.arrow_folder.absolutePath())
             print(f"Layer {counter} created")
         #self.updateHistogram()
-        self.arrow_button.stop_loading()
+        #self.arrow_button.stop_loading()
 
 
     def get_energy_range(self):
