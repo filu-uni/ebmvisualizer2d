@@ -101,7 +101,10 @@ def create_arrow_from_wav(file_path, number, out_folder="arrow_files"):
     
     print(f"Exported to {out_file}")
     return out_file
+
+
 def get_df_from_arrow(file, ch="channel_1", nth=1):
+    
     file_path = Path(file).absolute()
     
     ldf = pl.scan_ipc(file_path)
@@ -109,6 +112,9 @@ def get_df_from_arrow(file, ch="channel_1", nth=1):
     if nth > 1:
         ldf = ldf.gather_every(nth)
     
+    if ch == "mean":
+        ldf = ldf.select(["x","y",pl.mean_horizontal(pl.col("channel_1"),pl.col("channel_2"),pl.col("channel_3"),pl.col("channel_4")).alias("mean")])
+        return ldf
     
     ldf = ldf.select(["x", "y", ch])
     
@@ -139,23 +145,49 @@ def normalize_data(ldf, ch):
 class DataWorker(QThread):
     data_ready = Signal(object) 
 
-    def __init__(self, nth, ch, file):
+    def __init__(self, nth, ch, files):
         super().__init__()
         self.nth = nth
         self.ch = ch
-        self.file = file
+        self.files = files
 
     def run(self):
-        ldf = get_df_from_arrow(self.file, self.ch, self.nth)
-        ldf = normalize_data(ldf, self.ch)
+            
+        try:
+            # 1. Create a list of all LazyFrames
+            # This just stores the "instructions" for each file, using almost no RAM
+            lazy_plans = [
+                get_df_from_arrow(file, self.ch, self.nth) 
+                for file in self.files
+            ]
+            
+            # 2. Concat them all at once
+            # Polars can now optimize the entire operation globally
+            ldf = pl.concat(lazy_plans)
 
-        df = ldf.collect()
+            ldf = normalize_data(ldf, self.ch)
 
-        arr = df.to_numpy()
+            df = ldf.collect()
 
-        arr = np.ascontiguousarray(arr)
-        self.data_ready.emit(arr) 
-        self.finished.emit()
+            arr = df.to_numpy()
+
+            arr = np.ascontiguousarray(arr)
+            self.data_ready.emit(arr) 
+
+        except(Exception) as e:
+            print(f"task aborted because of {e}")
+
+        finally:
+            self.finished.emit()
+
+
+class ArrowWorker(QThread):
+    arrow_ready = Signal(object)
+    def __init__(self,file,number,out_path):
+        super().__init__()
+        self.file = file
+        self.number = number
+        self.out_path = out_path
 
 
 class WavHandler(FileSystemEventHandler):

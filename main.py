@@ -7,7 +7,7 @@ from __future__ import annotations
 import sys
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QSurfaceFormat
-from PySide6.QtWidgets import QApplication,QSlider, QHBoxLayout,QVBoxLayout, QWidget, QLabel, QPushButton, QSpinBox, QComboBox, QFileDialog
+from PySide6.QtWidgets import QApplication,QSlider, QHBoxLayout,QVBoxLayout, QWidget, QLabel, QPushButton, QSpinBox, QComboBox, QFileDialog, QTabWidget, QTextEdit
 
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
@@ -20,7 +20,7 @@ import sidebar as sidebar
 
 
 
-class Window(QWidget):
+class VisualizerTab(QWidget):
 
     def __init__(self, parent=None):
         QWidget.__init__(self, parent)
@@ -53,7 +53,11 @@ class Window(QWidget):
 
         thread = QThread()
         arrow_files = helpers.get_arrow_files(folder.absolutePath())
-        worker = helpers.DataWorker(nth, ch, arrow_files[layer-1])
+        #ugly workaround because python [1,2] includes 1 and but [2,2] doesnt include 2
+        if layer[0] == layer[1]:
+            worker = helpers.DataWorker(nth, ch, [arrow_files[layer[0]-1]])
+        else :
+            worker = helpers.DataWorker(nth, ch, arrow_files[layer[0]-1:layer[1]-1])
         worker.moveToThread(thread)
         self.active_threads.append(thread)
         thread.worker = worker
@@ -80,6 +84,18 @@ class Window(QWidget):
         else:
             print("Export failed.")
 
+    def __del__(self):
+        self.active_threads.clear()
+
+
+class ObpcreatorTab(QWidget):
+    def __init__(self, parent=None):
+        QWidget.__init__(self, parent)
+        layout = QHBoxLayout(self)
+        editor = QTextEdit()
+        layout.addWidget(editor)
+
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
@@ -88,7 +104,11 @@ if __name__ == "__main__":
     fmt.setVersion(3, 3)
     fmt.setProfile(QSurfaceFormat.CoreProfile)
     QSurfaceFormat.setDefaultFormat(fmt)
-
-    window = Window()
-    window.show()
+    
+    visualizerTab = VisualizerTab()
+    visualizerTab.show()
     sys.exit(app.exec())
+
+
+
+

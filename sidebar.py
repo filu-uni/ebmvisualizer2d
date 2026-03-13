@@ -242,30 +242,30 @@ class Sidebar(QWidget):
 
         layout = QVBoxLayout()
         self.setLayout(layout)
-        self.layer = 1
+        self.layer = (1,1)
         self.energy_range = (1000,4000)
         self.resolution = 10
         self.pointsize = 3
         self.channel = "channel_1"
         self.widgets = dict()
-        self.folder = QDir()
+        self.wav_folder = QDir()
         self.arrow_folder = QDir("arrow_files")
 
 
 
-        self.folder_button = QPushButton(self)
-        self.folder_button.setText("Choose Wav File Folder")
+        self.wav_folder_button = QPushButton(self)
+        self.wav_folder_button.setText("Choose Wav File Folder")
+        self.arrow_folder_button = QPushButton(self)
+        self.arrow_folder_button.setText("Choose Arrow File Folder")
         
         self.arrow_button = LoadingButton(parent=self,text="create arrow Files")
-        #self.arrow_button = QPushButton(self)
-        #self.arrow_button.setText("create arrow Files")
 
         self.recalculate = LoadingButton(parent=self,text="Recalculate")
 
         self.resolutionwidget = SliderWidget("Resolution",(1,1000),1)
 
         self.channelwidget = QComboBox()
-        self.channelwidget.addItems(["channel_1","channel_2","channel_3","channel_4"])
+        self.channelwidget.addItems(["channel_1","channel_2","channel_3","channel_4","mean"])
 
         self.pointsizewidget = SliderWidget("PointSize",(1,20),3)
 
@@ -274,7 +274,7 @@ class Sidebar(QWidget):
         #self.histogramWidget.setMaximumSize(200,200)
         self.histogramWidget.show()
 
-        self.layerwidget = SliderWidget("Layers",(1,100),1)
+        self.layerwidget = SliderWidget("Layers",(1,100),(1,1),double=True)
         self.energywidget = SliderWidget("Energy",(1,2**15),(1000,4000),double=True)
 
         self.layer_display = QLabel()
@@ -285,7 +285,8 @@ class Sidebar(QWidget):
 
 
 
-        self.folder_button.released.connect(self.choose_folder)
+        self.wav_folder_button.released.connect(self.choose_wav_folder)
+        self.arrow_folder_button.released.connect(self.choose_arrow_folder)
         self.arrow_button.released.connect(self.create_arrow_files)
         self.recalculate.released.connect(self.beginRecalculation)
         self.channelwidget.currentTextChanged.connect(self.beginRecalculation)
@@ -295,7 +296,8 @@ class Sidebar(QWidget):
         self.resolutionwidget.released.connect(self.beginRecalculation)
         self.export_button.released.connect(self.export.emit)
 
-        layout.addWidget(self.folder_button)
+        layout.addWidget(self.wav_folder_button)
+        layout.addWidget(self.arrow_folder_button)
         layout.addWidget(self.arrow_button)
 
         energyLayout = QVBoxLayout()
@@ -317,18 +319,26 @@ class Sidebar(QWidget):
         layout.addStretch()
 
 
-    def choose_folder(self):
+    def choose_wav_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Directory")
 
         if folder:  
-            self.folder = QDir(folder)
-            self.folder_button.setText(self.folder.absolutePath())
+            self.wav_folder = QDir(folder)
+            self.wav_folder_button.setText(self.wav_folder.absolutePath())
         else:
-            self.folder_button.setText("Choose Wav File Folder")
+            self.wav_folder_button.setText("Choose Wav File Folder")
+    def choose_arrow_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Directory")
+
+        if folder:  
+            self.arrow_folder = QDir(folder)
+            self.arrow_folder_button.setText(self.arrow_folder.absolutePath())
+        else:
+            self.arrow_folder_button.setText("Choose Wav File Folder")
 
     def create_arrow_files(self):
         #self.arrow_button.start_loading()
-        wav_files = helpers.get_wav_files(self.folder.absolutePath())
+        wav_files = helpers.get_wav_files(self.wav_folder.absolutePath())
         counter = 0
         self.layerwidget.setRange((1,len(wav_files)))
         for file in wav_files:
@@ -357,16 +367,18 @@ class Sidebar(QWidget):
         hist_df = helpers.create_histogram_from_arrow_folder(self.arrow_folder.absolutePath(),self.channel)
         self.histogramWidget.update_data(hist_df,self.channel)
         self.energywidget.setRange((hist_df[self.channel].min(),hist_df[self.channel].max()))
+   
     def updateLayers(self):
         layers = len(helpers.get_arrow_files(self.arrow_folder.absolutePath()))
         self.layerwidget.setRange((1,layers))
+
     def beginRecalculation(self):
         self.updateLayers() 
         self.layer = self.layerwidget.getValue()
-        if self.folder.exists():
-            wav_folder = helpers.get_wav_files(self.folder.absolutePath())
-            if self.layer < len(wav_folder):
-                self.layer_display.setText(str(wav_folder[self.layer].name))
+        if self.wav_folder.exists():
+            wav_folder = helpers.get_wav_files(self.wav_folder.absolutePath())
+            if self.layer[1] < len(wav_folder):
+                self.layer_display.setText(str(wav_folder[self.layer[1]].name))
         self.resolution = self.resolutionwidget.getValue()
         self.channel = self.channelwidget.currentText()
         self.begincalculation.emit()
