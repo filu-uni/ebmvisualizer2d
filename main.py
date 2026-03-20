@@ -46,18 +46,25 @@ class VisualizerTab(QWidget):
         self.setWindowTitle(self.tr("Ebm Visualisation"))
 
     def handle_array_update(self):
+        print("handle array update")
         nth = self.sidebar.getResolution()
         ch = self.sidebar.getChannel()
         layer = self.sidebar.getLayer()
-        folder = self.sidebar.getCsvFolder()
+        folder = self.sidebar.getArrowFolder()
+
+        for thread in self.active_threads:
+            thread.terminate()
+        self.active_threads.clear()
 
         thread = QThread()
         arrow_files = helpers.get_arrow_files(folder.absolutePath())
-        #ugly workaround because python [1,2] includes 1 and but [2,2] doesnt include 2
+
+        print(layer)
         if layer[0] == layer[1]:
             worker = helpers.DataWorker(nth, ch, [arrow_files[layer[0]-1]])
         else :
             worker = helpers.DataWorker(nth, ch, arrow_files[layer[0]-1:layer[1]-1])
+        
         worker.moveToThread(thread)
         self.active_threads.append(thread)
         thread.worker = worker
@@ -85,7 +92,8 @@ class VisualizerTab(QWidget):
             print("Export failed.")
 
     def __del__(self):
-        self.active_threads.clear()
+        for thread in self.active_threads:
+            thread.terminate()
 
 
 class ObpcreatorTab(QWidget):

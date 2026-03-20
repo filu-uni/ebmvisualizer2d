@@ -19,6 +19,7 @@ from pathlib import Path
 import helperfunctions as helpers
 import numpy as np
 import openglwidget as glw
+import polars as pl
 
 class LoadingButton(QPushButton):
     def __init__(self, text, parent=None):
@@ -129,7 +130,7 @@ class SliderWidget(QWidget):
 
         self.value_label.valueChanged.connect(self.update_slider)
         self.value_label.valueChanged.connect(self.finishedEditing)
-        #self.value_label.editingFinished.connect(self.finishedEditing)
+        self.value_label.editingFinished.connect(self.finishedEditing)
 
         self.slider.valueChanged.connect(self.update_label)
         self.slider.valueChanged.connect(self.sendValue)
@@ -146,7 +147,7 @@ class SliderWidget(QWidget):
     def update_slider(self, value):
         value = value
         self.slider.setValue(value)
-        self.valueChanged.emit()
+        #self.valueChanged.emit()
     def sendValue(self):
         self.valueChanged.emit()
     def finishedEditing(self):
@@ -289,7 +290,7 @@ class Sidebar(QWidget):
         self.arrow_folder_button.released.connect(self.choose_arrow_folder)
         self.arrow_button.released.connect(self.create_arrow_files)
         self.recalculate.released.connect(self.beginRecalculation)
-        self.channelwidget.currentTextChanged.connect(self.beginRecalculation)
+        self.channelwidget.activated.connect(self.beginRecalculation)
         self.pointsizewidget.valueChanged.connect(self.get_pointsize)
         self.energywidget.valueChanged.connect(self.get_energy_range)
         self.layerwidget.released.connect(self.beginRecalculation)
@@ -314,8 +315,6 @@ class Sidebar(QWidget):
         layout.addWidget(self.export_button)
 
 
-        if helpers.get_arrow_files(self.arrow_folder.absolutePath()):
-            self.updateHistogram()
         layout.addStretch()
 
 
@@ -327,14 +326,22 @@ class Sidebar(QWidget):
             self.wav_folder_button.setText(self.wav_folder.absolutePath())
         else:
             self.wav_folder_button.setText("Choose Wav File Folder")
+
     def choose_arrow_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Directory")
 
         if folder:  
             self.arrow_folder = QDir(folder)
             self.arrow_folder_button.setText(self.arrow_folder.absolutePath())
+
+            self.channelwidget.clear()
+            files = self.arrow_folder.entryInfoList(filters=QDir.Filter.Files,sort=QDir.SortFlag.Name)
+            file = files[0].absolutePath()
+            column_names = pl.scan_ipc(file).collect_schema().names()
+            self.channelwidget.addItems(column_names[2:])
+            #self.updateHistogram()
         else:
-            self.arrow_folder_button.setText("Choose Wav File Folder")
+            self.arrow_folder_button.setText("Choose Arrow File Folder")
 
     def create_arrow_files(self):
         #self.arrow_button.start_loading()
@@ -345,7 +352,7 @@ class Sidebar(QWidget):
             counter += 1
             helpers.create_arrow_from_wav(file,counter,self.arrow_folder.absolutePath())
             print(f"Layer {counter} created")
-        #self.updateHistogram()
+        self.updateHistogram()
         #self.arrow_button.stop_loading()
 
 
@@ -361,7 +368,7 @@ class Sidebar(QWidget):
         return self.resolution
     def getLayer(self):
         return self.layer
-    def getCsvFolder(self):
+    def getArrowFolder(self):
         return self.arrow_folder
     def updateHistogram(self):
         hist_df = helpers.create_histogram_from_arrow_folder(self.arrow_folder.absolutePath(),self.channel)
@@ -370,10 +377,13 @@ class Sidebar(QWidget):
    
     def updateLayers(self):
         layers = len(helpers.get_arrow_files(self.arrow_folder.absolutePath()))
+        print(layers)
         self.layerwidget.setRange((1,layers))
 
     def beginRecalculation(self):
-        self.updateLayers() 
+        print("begin calculation")
+        #self.updateLayers() 
+        print("after layerupdate")
         self.layer = self.layerwidget.getValue()
         if self.wav_folder.exists():
             wav_folder = helpers.get_wav_files(self.wav_folder.absolutePath())

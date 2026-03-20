@@ -47,7 +47,7 @@ def get_arrow_files(directory):
     return natsorted(list(base_path.glob("*.arrow")))
 
 
-def create_histogram_from_arrow_folder(folder_path, ch="channel_1", bins=100):
+def create_histogram_from_arrow_folder(folder_path, ch="channel_1"):
     folder = Path(folder_path)
     pattern = str(folder / "*.arrow")
     
@@ -57,7 +57,7 @@ def create_histogram_from_arrow_folder(folder_path, ch="channel_1", bins=100):
     .group_by(ch)
     .len()
     .sort(ch) 
-    .collect(streaming=True)
+    .collect()
     )
     return hist_df
 
@@ -85,14 +85,16 @@ def create_arrow_from_wav(file_path, number, out_folder="arrow_files"):
 
     samplerate, data = wavfile.read(file_path)
     
+    mean = np.mean([data[:,0],data[:,1],data[:,2],data[:,3]],axis=0)
     df = pl.DataFrame({
         "x": data[:, -4].astype(np.float32),
         "y": data[:, -3].astype(np.float32),
         "channel_1": data[:, 0].astype(np.float32),
         "channel_2": data[:, 1].astype(np.float32),
         "channel_3": data[:, 2].astype(np.float32),
-        "channel_4": data[:, 3].astype(np.float32)
-    })
+        "channel_4": data[:, 3].astype(np.float32),
+        "mean": mean
+        })
 
     df.write_ipc(out_file)
     del data
@@ -112,9 +114,9 @@ def get_df_from_arrow(file, ch="channel_1", nth=1):
     if nth > 1:
         ldf = ldf.gather_every(nth)
     
-    if ch == "mean":
-        ldf = ldf.select(["x","y",pl.mean_horizontal(pl.col("channel_1"),pl.col("channel_2"),pl.col("channel_3"),pl.col("channel_4")).alias("mean")])
-        return ldf
+    #if ch == "mean":
+    #    ldf = ldf.select(["x","y",pl.mean_horizontal(pl.col("channel_1"),pl.col("channel_2"),pl.col("channel_3"),pl.col("channel_4")).alias("mean")])
+       #return ldf
     
     ldf = ldf.select(["x", "y", ch])
     
