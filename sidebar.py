@@ -5,7 +5,8 @@
 from __future__ import annotations
 
 import sys
-from PySide6.QtCore import Qt, Signal, QThread, QDir, QPoint, QPointF, QMargins
+from PySide6.QtCore import Qt, Signal, QThread, QDir, QPoint, QPointF, QMargins, QRunnable, QThreadPool
+
 from PySide6.QtGui import QSurfaceFormat, QMovie, QPainter
 
 from PySide6.QtWidgets import QApplication,QSlider, QHBoxLayout,QVBoxLayout, QWidget, QLabel, QPushButton, QSpinBox, QComboBox, QFileDialog, QStackedLayout
@@ -334,11 +335,12 @@ class Sidebar(QWidget):
             self.arrow_folder = QDir(folder)
             self.arrow_folder_button.setText(self.arrow_folder.absolutePath())
 
-            self.channelwidget.clear()
             files = self.arrow_folder.entryInfoList(filters=QDir.Filter.Files,sort=QDir.SortFlag.Name)
-            file = files[0].absolutePath()
-            column_names = pl.scan_ipc(file).collect_schema().names()
-            self.channelwidget.addItems(column_names[2:])
+            if files:
+                self.channelwidget.clear()
+                file = files[0].absolutePath()
+                column_names = pl.scan_ipc(file).collect_schema().names()
+                self.channelwidget.addItems(column_names[2:])
             #self.updateHistogram()
         else:
             self.arrow_folder_button.setText("Choose Arrow File Folder")
@@ -348,11 +350,15 @@ class Sidebar(QWidget):
         wav_files = helpers.get_wav_files(self.wav_folder.absolutePath())
         counter = 0
         self.layerwidget.setRange((1,len(wav_files)))
+        self.pool = QThreadPool.globalInstance()
+        self.pool.setMaxThreadCount(4)
+
         for file in wav_files:
             counter += 1
-            helpers.create_arrow_from_wav(file,counter,self.arrow_folder.absolutePath())
-            print(f"Layer {counter} created")
-        self.updateHistogram()
+            task = helpers.CreateArrowFile(file,counter,self.arrow_folder.absolutePath())
+            self.pool.start(task)
+
+        #self.updateHistogram()
         #self.arrow_button.stop_loading()
 
 

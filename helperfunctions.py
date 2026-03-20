@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from PySide6.QtCore import Signal, QThread
+from PySide6.QtCore import Signal, QThread, QRunnable, QThreadPool
 import pyarrow
 import polars as pl
 from natsort import natsorted
@@ -89,10 +89,6 @@ def create_arrow_from_wav(file_path, number, out_folder="arrow_files"):
     df = pl.DataFrame({
         "x": data[:, -4].astype(np.float32),
         "y": data[:, -3].astype(np.float32),
-        "channel_1": data[:, 0].astype(np.float32),
-        "channel_2": data[:, 1].astype(np.float32),
-        "channel_3": data[:, 2].astype(np.float32),
-        "channel_4": data[:, 3].astype(np.float32),
         "mean": mean
         })
 
@@ -105,7 +101,7 @@ def create_arrow_from_wav(file_path, number, out_folder="arrow_files"):
     return out_file
 
 
-def get_df_from_arrow(file, ch="channel_1", nth=1):
+def get_df_from_arrow(file, ch="mean", nth=8):
     
     file_path = Path(file).absolute()
     
@@ -113,10 +109,6 @@ def get_df_from_arrow(file, ch="channel_1", nth=1):
     
     if nth > 1:
         ldf = ldf.gather_every(nth)
-    
-    #if ch == "mean":
-    #    ldf = ldf.select(["x","y",pl.mean_horizontal(pl.col("channel_1"),pl.col("channel_2"),pl.col("channel_3"),pl.col("channel_4")).alias("mean")])
-       #return ldf
     
     ldf = ldf.select(["x", "y", ch])
     
@@ -183,13 +175,18 @@ class DataWorker(QThread):
             self.finished.emit()
 
 
-class ArrowWorker(QThread):
-    arrow_ready = Signal(object)
+class CreateArrowFile(QRunnable):
     def __init__(self,file,number,out_path):
         super().__init__()
         self.file = file
         self.number = number
         self.out_path = out_path
+
+    def run(self):
+            
+        create_arrow_from_wav(self.file,self.number,self.out_path)
+        print(f"Layer {self.number} created")
+            
 
 
 class WavHandler(FileSystemEventHandler):
