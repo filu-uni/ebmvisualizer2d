@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtWidgets import QApplication, QHBoxLayout,QVBoxLayout, QWidget, QLabel, QPushButton
 
+from threading import Lock
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 import numpy as np
 import ctypes
@@ -128,18 +129,20 @@ class PointCloud2D(QOpenGLWidget):
         self.u_transform = None
         self.vao = 0
         self.vbo = 0
+        self.lock = Lock()
 
     # ---------- public API ----------
 
     def set_points(self, data: np.ndarray):
         """data shape: (N, 3) -> x, y, value"""
-        self.data = data.astype(np.float32)
-        self.point_count = len(data)
+        with self.lock:
+            self.data = data.astype(np.float32)
+            self.point_count = len(data)
 
-        if self.isValid():
-            self._upload_data()
+            if self.isValid():
+                self._upload_data()
 
-        self.update()
+            self.update()
 
     def set_point_size(self, size: float):
         self.point_size = float(size)
@@ -153,6 +156,7 @@ class PointCloud2D(QOpenGLWidget):
     # ---------- Qt / OpenGL ----------
 
     def initializeGL(self):
+        self.context().aboutToBeDestroyed.connect(self.cleanup)
         glEnable(GL_PROGRAM_POINT_SIZE)
         self.makeCurrent()
         self.vao = glGenVertexArrays(1)
@@ -164,13 +168,10 @@ class PointCloud2D(QOpenGLWidget):
         self.program = self._create_program()
         self._get_uniforms()
 
-        self.vao = glGenVertexArrays(1)
-        self.vbo = glGenBuffers(1)
 
         self._create_colormap()
 
-        if self.isValid():
-            self._upload_data()
+        self._upload_data()
 
     def resizeGL(self, w, h):
         glViewport(0, 0, w, h)
@@ -194,11 +195,6 @@ class PointCloud2D(QOpenGLWidget):
         glDrawArrays(GL_POINTS, 0, self.point_count)
 
     # ---------- mouse interaction ----------
-
-#    def wheelEvent(self, event):
-#        factor = 1.1 if event.angleDelta().y() > 0 else 0.9
-#        self.zoom *= factor
-#        self.update()
 
     def wheelEvent(self, event):
         # 1. Get mouse position in widget pixels
@@ -253,6 +249,8 @@ class PointCloud2D(QOpenGLWidget):
         ], dtype=np.float32)
 
     def _upload_data(self):
+        if self.data is None:
+            return
         self.makeCurrent()
         glBindVertexArray(self.vao)
         
@@ -317,5 +315,17 @@ class PointCloud2D(QOpenGLWidget):
         pass
 
 
-
+    def cleanup(self):
+        """Call this manually or on the aboutToQuit signal."""
+        self.makeCurrent()
+        if self.program:
+            # glDeleteProgram(self.program) # Optional, but safer to just nullify
+            self.program = 0
+        if self.vbo:
+            # glDeleteBuffers(1, [self.vbo])
+            self.vbo = 0
+        if self.vao:
+            # glDeleteVertexArrays(1, [self.vao])
+            self.vao = 0
+        self.doneCurrent()
 

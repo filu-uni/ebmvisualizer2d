@@ -5,7 +5,7 @@ from __future__ import annotations
 
 
 import sys
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import Qt, Signal, QThread, QThreadPool
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtWidgets import QApplication,QSlider, QHBoxLayout,QVBoxLayout, QWidget, QLabel, QPushButton, QSpinBox, QComboBox, QFileDialog, QTabWidget, QTextEdit
 
@@ -17,16 +17,18 @@ import helperfunctions as helpers
 import numpy as np
 import openglwidget as glw
 import sidebar as sidebar
+import faulthandler
 
+# Enable faulthandler for segfaults, even in GUI apps
+#faulthandler.enable(file=sys.stderr, all_threads=True)
 
 
 class VisualizerTab(QWidget):
 
     def __init__(self, parent=None):
-        QWidget.__init__(self, parent)
+        super().__init__()
 
         mainLayout = QHBoxLayout(self)
-        self.active_threads = []
         self.sidebar = sidebar.Sidebar()
         self.sidebar.setMinimumSize(200,700)
         self.glwidget = glw.PointCloud2D(parent=self)
@@ -46,38 +48,31 @@ class VisualizerTab(QWidget):
         self.setWindowTitle(self.tr("Ebm Visualisation"))
 
     def handle_array_update(self):
-        print("handle array update")
         nth = self.sidebar.getResolution()
         ch = self.sidebar.getChannel()
         layer = self.sidebar.getLayer()
         folder = self.sidebar.getArrowFolder()
 
-        for thread in self.active_threads:
-            thread.terminate()
-        self.active_threads.clear()
-
-        thread = QThread()
         arrow_files = helpers.get_arrow_files(folder.absolutePath())
+        if layer[1]-1 not in range(len(arrow_files)):
+            return
+            
+        #worker = helpers.DataWorker(nth, ch, [arrow_files[layer[1]-1]])
 
-        print(layer)
+        #print(layer)
         if layer[0] == layer[1]:
             worker = helpers.DataWorker(nth, ch, [arrow_files[layer[0]-1]])
         else :
             worker = helpers.DataWorker(nth, ch, arrow_files[layer[0]-1:layer[1]-1])
-        
-        worker.moveToThread(thread)
-        self.active_threads.append(thread)
-        thread.worker = worker
-        thread.started.connect(worker.run)
-        thread.worker.data_ready.connect(self.on_data_received)
-        thread.worker.finished.connect(thread.quit) # Stop thread when done
-        thread.worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+
+        self.pool = QThreadPool.globalInstance()
+        worker.carrier.finished.connect(self.on_data_received)
+        self.pool.start(worker)
+
         self.sidebar.startCalculation()
-        thread.finished.connect(lambda: self.active_threads.remove(thread))
-        thread.start()
 
     def on_data_received(self, arr):
+        arr = np.ascontiguousarray(arr)
         self.glwidget.set_points(arr)
         self.sidebar.finishCalculation()
 
@@ -91,10 +86,18 @@ class VisualizerTab(QWidget):
         else:
             print("Export failed.")
 
-    def __del__(self):
-        for thread in self.active_threads:
-            thread.terminate()
-
+    def closeEvent(self, event):
+            """
+            Wait for all threads in the global pool to finish 
+            before allowing the window to close.
+            """
+            pool = QThreadPool.globalInstance()
+            
+            # This tells the pool not to start any NEW tasks
+            # and waits for current ones to finish.
+            pool.waitForDone() 
+            
+            event.accept()
 
 class ObpcreatorTab(QWidget):
     def __init__(self, parent=None):

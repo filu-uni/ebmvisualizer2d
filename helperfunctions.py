@@ -7,10 +7,14 @@ from pathlib import Path
 import numpy as np
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from PySide6.QtCore import Signal, QThread, QRunnable, QThreadPool
+from PySide6.QtCore import Signal, QThread, QRunnable, QThreadPool, QObject
+from PySide6.QtWidgets import QApplication
 import pyarrow
 import polars as pl
 from natsort import natsorted
+from watchdog.events import FileSystemEventHandler, FileClosedEvent
+import time
+
 
 from OpenGL.GL import (
     glClearColor, glClear, GL_COLOR_BUFFER_BIT,
@@ -47,7 +51,7 @@ def get_arrow_files(directory):
     return natsorted(list(base_path.glob("*.arrow")))
 
 
-def create_histogram_from_arrow_folder(folder_path, ch="channel_1"):
+def create_histogram_from_arrow_folder(folder_path, ch="mean"):
     folder = Path(folder_path)
     pattern = str(folder / "*.arrow")
     
@@ -85,7 +89,8 @@ def create_arrow_from_wav(file_path, number, out_folder="arrow_files"):
 
     samplerate, data = wavfile.read(file_path)
     
-    mean = np.mean([data[:,0],data[:,1],data[:,2],data[:,3]],axis=0)
+    stride = 8
+    mean = np.mean([data[::stride,0],data[::stride,1],data[::stride,2],data[::stride,3]],axis=0)
     df = pl.DataFrame({
         "x": data[:, -4].astype(np.float32),
         "y": data[:, -3].astype(np.float32),
@@ -93,6 +98,7 @@ def create_arrow_from_wav(file_path, number, out_folder="arrow_files"):
         })
 
     df.write_ipc(out_file)
+
     del data
     
     del df
@@ -115,39 +121,38 @@ def get_df_from_arrow(file, ch="mean", nth=8):
     return ldf
 
 def normalize_data(ldf, ch):
-    
-    ranges = ldf.select([
-        pl.col("x").min().alias("xmin"),
-        pl.col("x").max().alias("xmax"),
-        pl.col("y").min().alias("ymin"),
-        pl.col("y").max().alias("ymax"),
-    ]).collect()
+    # Compute min/max lazily
+    x_min = pl.col("x").min()
+    x_max = pl.col("x").max()
+    y_min = pl.col("y").min()
+    y_max = pl.col("y").max()
 
-    xmin, xmax = ranges["xmin"][0], ranges["xmax"][0]
-    ymin, ymax = ranges["ymin"][0], ranges["ymax"][0]
-    
-    
+    # Add normalized columns lazily
     ldf = ldf.with_columns([
-        (2.0 * (pl.col("x") - xmin) / (xmax - xmin) - 1.0).alias("x_norm"),
-        (2.0 * (pl.col("y") - ymin) / (ymax - ymin) - 1.0).alias("y_norm")
+        ((2 * (pl.col("x") - x_min) / (x_max - x_min)) - 1).alias("x_norm"),
+        ((2 * (pl.col("y") - y_min) / (y_max - y_min)) - 1).alias("y_norm"),
     ])
-    
-    ldf = ldf.select(["x_norm", "y_norm", ch])
 
+    # Select only relevant columns
+    ldf = ldf.select(["x_norm", "y_norm", ch])
     return ldf
 
-class DataWorker(QThread):
-    data_ready = Signal(object) 
+
+
+class DataCarriage(QObject):
+    finished = Signal(object)
+
+class DataWorker(QRunnable):
 
     def __init__(self, nth, ch, files):
         super().__init__()
         self.nth = nth
         self.ch = ch
         self.files = files
+        self.carrier = DataCarriage(QApplication.instance())
 
     def run(self):
             
-        try:
             # 1. Create a list of all LazyFrames
             # This just stores the "instructions" for each file, using almost no RAM
             lazy_plans = [
@@ -157,7 +162,7 @@ class DataWorker(QThread):
             
             # 2. Concat them all at once
             # Polars can now optimize the entire operation globally
-            ldf = pl.concat(lazy_plans)
+            ldf = pl.concat(lazy_plans,rechunk=True)
 
             ldf = normalize_data(ldf, self.ch)
 
@@ -165,15 +170,11 @@ class DataWorker(QThread):
 
             arr = df.to_numpy()
 
-            arr = np.ascontiguousarray(arr)
-            self.data_ready.emit(arr) 
+            self.carrier.finished.emit(arr)
 
-        except(Exception) as e:
-            print(f"task aborted because of {e}")
 
-        finally:
-            self.finished.emit()
-
+class ArrowFileCreatorSignals(QObject):
+    finishedTask = Signal()
 
 class CreateArrowFile(QRunnable):
     def __init__(self,file,number,out_path):
@@ -181,12 +182,70 @@ class CreateArrowFile(QRunnable):
         self.file = file
         self.number = number
         self.out_path = out_path
+        self.signal = ArrowFileCreatorSignals()
 
     def run(self):
             
         create_arrow_from_wav(self.file,self.number,self.out_path)
         print(f"Layer {self.number} created")
+        self.signal.finishedTask.emit()
             
+
+class WatchdogSignals(QObject):
+    startWatching = Signal(str)
+    stopWatching = Signal()
+    file_ready = Signal(str)
+    error = Signal(str)
+
+class WatchdogObserver(FileSystemEventHandler):
+    def __init__(self, signals):
+        super().__init__()
+        self.signals = signals
+
+    def on_closed(self, event):
+        # IN_CLOSE_WRITE: The file descriptor is released after writing.
+        if not event.is_directory:
+            self.signals.file_ready.emit(event.src_path)
+
+    def on_moved(self, event):
+        # Handle 'Atomic Saves': Temp file is moved to final destination.
+        if not event.is_directory:
+            self.signals.file_ready.emit(event.src_path)
+
+class AsyncWatchdogTask(QRunnable):
+    """
+    The background task managed by QThreadPool.
+    """
+    def __init__(self, watch_path):
+        super().__init__()
+        self.watch_path = watch_path
+        self.signals = WatchdogSignals()
+        self.observer = Observer()
+        self._keep_running = True
+
+    def run(self):
+        try:
+            handler = WatchdogObserver(self.signals)
+            self.observer.schedule(handler, self.watch_path, recursive=False)
+            self.observer.start()
+
+            # Signal that monitoring has officially begun
+            self.signals.startWatching.emit(self.watch_path)
+
+            # Keep the QRunnable alive while monitoring
+            while self._keep_running:
+                time.sleep(0.1)
+
+            self.observer.stop()
+            self.observer.join()
+            self.signals.stopWatching.emit()
+
+        except Exception as e:
+            self.signals.error.emit(str(e))
+
+    def stop(self):
+        """Called from the main thread to shut down the watcher."""
+        self._keep_running = False
 
 
 class WavHandler(FileSystemEventHandler):

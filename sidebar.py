@@ -21,6 +21,7 @@ import helperfunctions as helpers
 import numpy as np
 import openglwidget as glw
 import polars as pl
+import os
 
 class LoadingButton(QPushButton):
     def __init__(self, text, parent=None):
@@ -46,6 +47,14 @@ class LoadingButton(QPushButton):
         self.movie.start()
         self.setEnabled(False)
 
+    def start_non_blocking_loading(self):
+        self.setText("") 
+        self.overlay.show()
+        self.movie.start()
+    
+    def isRunning(self):
+        return self.movie.state() == QMovie.MovieState.Running
+
     def stop_loading(self):
         self.movie.stop()
         self.overlay.hide()
@@ -70,7 +79,7 @@ class RangeSpinBox(QWidget):
         self.spinboxmax = QSpinBox()
         self.spinboxmax.setRange(value_range[0],value_range[1])
         self.spinboxmax.setValue(init_val[1])
-
+        
         self.layout.addWidget(self.spinboxmin)
         self.layout.addWidget(self.spinboxmax)
         
@@ -140,15 +149,21 @@ class SliderWidget(QWidget):
 
     def getValue(self):
         return self.slider.value()
+    def setValue(self,value):
+        self.update_label(value)
+        self.update_slider(value)
+        self.released.emit()
     def update_label(self, value):
         self.value_label.blockSignals(True)
         value = value
         self.value_label.setValue(value)
         self.value_label.blockSignals(False)
     def update_slider(self, value):
+        self.slider.blockSignals(True)
         value = value
         self.slider.setValue(value)
-        #self.valueChanged.emit()
+        self.valueChanged.emit()
+        self.slider.blockSignals(False)
     def sendValue(self):
         self.valueChanged.emit()
     def finishedEditing(self):
@@ -248,10 +263,12 @@ class Sidebar(QWidget):
         self.energy_range = (1000,4000)
         self.resolution = 10
         self.pointsize = 3
-        self.channel = "channel_1"
+        self.channel = "mean"
         self.widgets = dict()
         self.wav_folder = QDir()
         self.arrow_folder = QDir("arrow_files")
+        self.arrowpool = QThreadPool(self)
+        self.watchdog_file_counter = 0
 
 
 
@@ -262,18 +279,19 @@ class Sidebar(QWidget):
         
         self.arrow_button = LoadingButton(parent=self,text="create arrow Files")
 
+        self.watchdog = LoadingButton(parent=self,text="deploy watchdog")
+
         self.recalculate = LoadingButton(parent=self,text="Recalculate")
 
         self.resolutionwidget = SliderWidget("Resolution",(1,1000),1)
 
         self.channelwidget = QComboBox()
-        self.channelwidget.addItems(["channel_1","channel_2","channel_3","channel_4","mean"])
+        self.channelwidget.addItems(["mean"])
 
         self.pointsizewidget = SliderWidget("PointSize",(1,20),3)
 
         self.histogramWidget = HistogramPlot(self)
         self.histogramWidget.setMinimumSize(200,200)
-        #self.histogramWidget.setMaximumSize(200,200)
         self.histogramWidget.show()
 
         self.layerwidget = SliderWidget("Layers",(1,100),(1,1),double=True)
@@ -290,6 +308,8 @@ class Sidebar(QWidget):
         self.wav_folder_button.released.connect(self.choose_wav_folder)
         self.arrow_folder_button.released.connect(self.choose_arrow_folder)
         self.arrow_button.released.connect(self.create_arrow_files)
+        self.watchdog.released.connect(self.flip_watchdog)
+
         self.recalculate.released.connect(self.beginRecalculation)
         self.channelwidget.activated.connect(self.beginRecalculation)
         self.pointsizewidget.valueChanged.connect(self.get_pointsize)
@@ -300,6 +320,7 @@ class Sidebar(QWidget):
 
         layout.addWidget(self.wav_folder_button)
         layout.addWidget(self.arrow_folder_button)
+        layout.addWidget(self.watchdog)
         layout.addWidget(self.arrow_button)
 
         energyLayout = QVBoxLayout()
@@ -317,6 +338,7 @@ class Sidebar(QWidget):
 
 
         layout.addStretch()
+        self.updateLayers()
 
 
     def choose_wav_folder(self):
@@ -336,6 +358,7 @@ class Sidebar(QWidget):
             self.arrow_folder_button.setText(self.arrow_folder.absolutePath())
 
             files = self.arrow_folder.entryInfoList(filters=QDir.Filter.Files,sort=QDir.SortFlag.Name)
+            self.updateLayers()
             if files:
                 self.channelwidget.clear()
                 file = files[0].absolutePath()
@@ -344,23 +367,42 @@ class Sidebar(QWidget):
             #self.updateHistogram()
         else:
             self.arrow_folder_button.setText("Choose Arrow File Folder")
+    
+    def create_arrow_file(self,file):
+        if os.path.isfile(file) and file.endswith(".wav"):
+            self.watchdog_file_counter += 1
+            task = helpers.CreateArrowFile(file,self.watchdog_file_counter,self.arrow_folder.absolutePath())
+            task.signal.finishedTask.connect(self.updateLayers)
+            self.arrowpool.start(task)
+            
 
     def create_arrow_files(self):
         #self.arrow_button.start_loading()
         wav_files = helpers.get_wav_files(self.wav_folder.absolutePath())
         counter = 0
         self.layerwidget.setRange((1,len(wav_files)))
-        self.pool = QThreadPool.globalInstance()
-        self.pool.setMaxThreadCount(4)
 
         for file in wav_files:
             counter += 1
             task = helpers.CreateArrowFile(file,counter,self.arrow_folder.absolutePath())
-            self.pool.start(task)
+            self.arrowpool.start(task)
 
         #self.updateHistogram()
         #self.arrow_button.stop_loading()
 
+    def flip_watchdog(self):
+        if self.watchdog.isRunning():
+            self.watchdog_task.stop()
+            self.watchdog.stop_loading()
+        else:
+            self.watchdog.start_non_blocking_loading()
+            self.watchpool = QThreadPool(self)
+            self.watchdog_task = helpers.AsyncWatchdogTask(self.wav_folder.absolutePath())
+            self.watchdog_task.signals.file_ready.connect(self.create_arrow_file)
+            self.watchdog_task.signals.error.connect(lambda e: print(f"Error: {e}"))
+
+            self.watchdog.setText("watching" + self.arrow_folder.absolutePath())
+            self.watchpool.start(self.watchdog_task)
 
     def get_energy_range(self):
         self.energy_range = self.energywidget.getValue()
@@ -383,13 +425,12 @@ class Sidebar(QWidget):
    
     def updateLayers(self):
         layers = len(helpers.get_arrow_files(self.arrow_folder.absolutePath()))
-        print(layers)
         self.layerwidget.setRange((1,layers))
+        lowerbound = layers - 10 if layers - 10 >= 1 else 1 
+        self.layerwidget.setValue((lowerbound,layers))
+        
 
     def beginRecalculation(self):
-        print("begin calculation")
-        #self.updateLayers() 
-        print("after layerupdate")
         self.layer = self.layerwidget.getValue()
         if self.wav_folder.exists():
             wav_folder = helpers.get_wav_files(self.wav_folder.absolutePath())
