@@ -20,7 +20,7 @@ import sidebar as sidebar
 import faulthandler
 
 # Enable faulthandler for segfaults, even in GUI apps
-#faulthandler.enable(file=sys.stderr, all_threads=True)
+faulthandler.enable(file=sys.stderr, all_threads=True)
 
 
 class VisualizerTab(QWidget):
@@ -66,7 +66,9 @@ class VisualizerTab(QWidget):
             worker = helpers.DataWorker(nth, ch, arrow_files[layer[0]-1:layer[1]-1])
 
         self.pool = QThreadPool.globalInstance()
+
         worker.carrier.finished.connect(self.on_data_received)
+        worker.carrier.histogram_finished.connect(self.sidebar.histogramWidget.update_data)
         self.pool.start(worker)
 
         self.sidebar.startCalculation()

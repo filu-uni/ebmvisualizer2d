@@ -81,7 +81,7 @@ def union_sum_scaled_fast(a, b, scale):
 
     return np.column_stack((unique_coords, summed_values))
 
-
+#need to create them sorted after mesh and then x and y
 def create_arrow_from_wav(file_path, number, out_folder="arrow_files"):
     out_dir = Path(out_folder)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -89,11 +89,11 @@ def create_arrow_from_wav(file_path, number, out_folder="arrow_files"):
 
     samplerate, data = wavfile.read(file_path)
     
-    stride = 8
-    mean = np.mean([data[::stride,0],data[::stride,1],data[::stride,2],data[::stride,3]],axis=0)
+    stride = 2
+    mean = np.max([data[::stride,0],data[::stride,1],data[::stride,2],data[::stride,3]],axis=0).astype(np.float32)
     df = pl.DataFrame({
-        "x": data[:, -4].astype(np.float32),
-        "y": data[:, -3].astype(np.float32),
+        "x": data[::stride, -4].astype(np.float32),
+        "y": data[::stride, -3].astype(np.float32),
         "mean": mean
         })
 
@@ -141,6 +141,7 @@ def normalize_data(ldf, ch):
 
 class DataCarriage(QObject):
     finished = Signal(object)
+    histogram_finished = Signal(object)
 
 class DataWorker(QRunnable):
 
@@ -149,7 +150,7 @@ class DataWorker(QRunnable):
         self.nth = nth
         self.ch = ch
         self.files = files
-        self.carrier = DataCarriage(QApplication.instance())
+        self.carrier = DataCarriage()
 
     def run(self):
             
@@ -160,13 +161,44 @@ class DataWorker(QRunnable):
                 for file in self.files
             ]
             
+            n = len(self.files)
+
             # 2. Concat them all at once
             # Polars can now optimize the entire operation globally
             ldf = pl.concat(lazy_plans,rechunk=True)
 
-            ldf = normalize_data(ldf, self.ch)
+            ldf = ldf.select(
+                    pl.col("x"),
+                    pl.col("y"),
+                    (pl.col(self.ch).cast(pl.Float32)/n).alias("value"))
+            maxvalue = ldf.select(pl.min("value")).collect()
+            print(maxvalue)
+
+            histocount = ldf.select(
+                    pl.col("value").n_unique().alias("unique count"),
+                    pl.col("value").approx_n_unique().alias("unique approx"),
+                    )
+
+            print(histocount.collect())
+            # More robust way to ensure energy and amount stay paired
+
+            histogram = (
+                ldf.group_by("value")
+                .agg(pl.len().alias("amount")) # pl.len() is the most efficient way to count rows
+                .sort("value")
+            )
+
+            histdf = histogram.collect()
+            # Convert to 2D numpy array: [[energy1, count1], [energy2, count2], ...]
+            hist = histdf.to_numpy() 
+            self.carrier.histogram_finished.emit(hist)
+
+            ldf = ldf.group_by(["x", "y"]).agg([pl.col("value").sum()])
+
+            ldf = normalize_data(ldf,"value")
 
             df = ldf.collect()
+            print(df)
 
             arr = df.to_numpy()
 
