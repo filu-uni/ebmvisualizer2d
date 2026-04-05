@@ -52,6 +52,7 @@ class VisualizerTab(QWidget):
         ch = self.sidebar.getChannel()
         layer = self.sidebar.getLayer()
         folder = self.sidebar.getArrowFolder()
+        strategy = self.sidebar.getStrategy()
 
         arrow_files = helpers.get_arrow_files(folder.absolutePath())
         if layer[1]-1 not in range(len(arrow_files)):
@@ -61,14 +62,14 @@ class VisualizerTab(QWidget):
 
         #print(layer)
         if layer[0] == layer[1]:
-            worker = helpers.DataWorker(nth, ch, [arrow_files[layer[0]-1]])
+            worker = helpers.DataWorker(nth, ch, [arrow_files[layer[0]-1]], strategy)
         else :
-            worker = helpers.DataWorker(nth, ch, arrow_files[layer[0]-1:layer[1]-1])
+            worker = helpers.DataWorker(nth, ch, arrow_files[layer[0]-1:layer[1]-1], strategy)
 
         self.pool = QThreadPool.globalInstance()
 
         worker.carrier.finished.connect(self.on_data_received)
-        worker.carrier.histogram_finished.connect(self.sidebar.histogramWidget.update_data)
+        worker.carrier.histogram_finished.connect(self.sidebar.updateHistogram)
         self.pool.start(worker)
 
         self.sidebar.startCalculation()

@@ -65,36 +65,25 @@ def create_histogram_from_arrow_folder(folder_path, ch="mean"):
     )
     return hist_df
 
-def union_sum_scaled_fast(a, b, scale):
-    coords = np.vstack((a[:, :2], b[:, :2]))
-    values = np.concatenate((a[:, 2], b[:, 2])) / scale
-
-    order = np.lexsort((coords[:, 1], coords[:, 0]))
-    coords = coords[order]
-    values = values[order]
-
-    unique_mask = np.any(np.diff(coords, axis=0), axis=1)
-    idx = np.concatenate(([0], np.nonzero(unique_mask)[0] + 1))
-
-    unique_coords = coords[idx]
-    summed_values = np.add.reduceat(values, idx)
-
-    return np.column_stack((unique_coords, summed_values))
 
 #need to create them sorted after mesh and then x and y
-def create_arrow_from_wav(file_path, number, out_folder="arrow_files"):
+def create_arrow_from_wav(file_path, number, out_folder="arrow_files", stride=1):
     out_dir = Path(out_folder)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"Layer_{number}.arrow"
 
     samplerate, data = wavfile.read(file_path)
     
-    stride = 2
-    mean = np.max([data[::stride,0],data[::stride,1],data[::stride,2],data[::stride,3]],axis=0).astype(np.float32)
+    values = np.mean([data[::stride,0],data[::stride,1],data[::stride,2],data[::stride,3]],axis=0).astype(np.float32)
+
     df = pl.DataFrame({
         "x": data[::stride, -4].astype(np.float32),
         "y": data[::stride, -3].astype(np.float32),
-        "mean": mean
+        "channel 1" :data[::stride,0],
+        "channel 2" :data[::stride,1],
+        "channel 3" :data[::stride,2],
+        "channel 4" :data[::stride,3],
+        "mean" : values
         })
 
     df.write_ipc(out_file)
@@ -138,6 +127,72 @@ def normalize_data(ldf, ch):
     return ldf
 
 
+class HistogramSignals(QObject):
+    filteredHistogram = Signal(object)
+
+class HistogramFilterTask(QRunnable):
+    
+    def __init__(self, ch, files):
+        super().__init__()
+        self.ch = ch
+        self.files = files
+        self.signals = HistogramSignals()
+
+    def run(self):
+            
+            # 1. Create a list of all LazyFrames
+            # This just stores the "instructions" for each file, using almost no RAM
+            lazy_plans = [
+                get_df_from_arrow(file, self.ch,1) 
+                for file in self.files
+            ]
+            
+
+            hist_list = [ df.select(
+                    (pl.col(self.ch).cast(pl.Float32)).alias("bin"))
+                    for df in lazy_plans]
+
+            hist_list = [ ( 
+                df.group_by("bin")
+                .agg(pl.len().alias("count")) # pl.len() is the most efficient way to count rows
+                .sort("bin")
+                )
+                for df in hist_list ]
+
+            dfs_with_ids = [
+                df.with_columns(pl.lit(f"hist_{i}").alias("hist_id"))
+                for i, df in enumerate(hist_list)
+            ]
+
+            combined_df = pl.concat(dfs_with_ids)
+
+            # Define how "aggressive" you want to be in finding differences
+            # A higher threshold means only very big differences are caught
+            STDEV_THRESHOLD = 0.4 
+
+            interesting_spots = (
+                combined_df.group_by("bin")
+                .agg(
+                    pl.col("count").std().alias("std_diff"),
+                    pl.col("count").max() - pl.col("count").min().alias("range_diff"),
+                    pl.col("count").mean().alias("avg_val")
+                )
+                .filter(pl.col("std_diff") > (pl.col("avg_val") * STDEV_THRESHOLD)) # Example: 40% deviation from mean
+                .sort("std_diff", descending=True)
+            )
+
+            final_histogram = combined_df.join(
+                interesting_spots.select("bin"), 
+                on="bin"
+            ).sort("count",descending=True)
+
+            hist = final_histogram.collect()
+            histogram = hist.to_numpy()
+
+            self.signals.filteredHistogram.emit(histogram)
+            print(histogram)
+    
+
 
 class DataCarriage(QObject):
     finished = Signal(object)
@@ -145,14 +200,18 @@ class DataCarriage(QObject):
 
 class DataWorker(QRunnable):
 
-    def __init__(self, nth, ch, files):
+    def __init__(self, nth, ch, files, strategy="mean"):
         super().__init__()
         self.nth = nth
         self.ch = ch
         self.files = files
         self.carrier = DataCarriage()
+        self.strategy = strategy
 
     def run(self):
+            
+            if len(self.files) < 1:
+                return
             
             # 1. Create a list of all LazyFrames
             # This just stores the "instructions" for each file, using almost no RAM
@@ -161,44 +220,48 @@ class DataWorker(QRunnable):
                 for file in self.files
             ]
             
+            #we devide by n since we will add n measurements back on top again
             n = len(self.files)
 
             # 2. Concat them all at once
             # Polars can now optimize the entire operation globally
-            ldf = pl.concat(lazy_plans,rechunk=True)
+            
+            ldf = pl.concat(lazy_plans,rechunk=True) if n > 1 else lazy_plans[0]
+
+            histogram = (
+                ldf.group_by(self.ch)
+                .agg(pl.len().alias("amount")) # pl.len() is the most efficient way to count rows
+                .sort(self.ch)
+            )
+            
+
+            #noise_reduced = histogram.select(
+            #        (pl.col("amount") > 1000).alias("reduced"),
+            #        pl.col(self.ch)
+            #        )
+
+            ldf = ldf.join(histogram, on=self.ch,how="semi")
+    
+            histdf = histogram.collect()
+            # Convert to 2D numpy array: [[energy1, count1], [energy2, count2], ...]
+            hist = histdf.to_numpy()
+            self.carrier.histogram_finished.emit(hist)
+
+            temp = ldf.select(pl.col(self.ch)).collect()
 
             ldf = ldf.select(
                     pl.col("x"),
                     pl.col("y"),
-                    (pl.col(self.ch).cast(pl.Float32)/n).alias("value"))
-            maxvalue = ldf.select(pl.min("value")).collect()
-            print(maxvalue)
-
-            histocount = ldf.select(
-                    pl.col("value").n_unique().alias("unique count"),
-                    pl.col("value").approx_n_unique().alias("unique approx"),
-                    )
-
-            print(histocount.collect())
-            # More robust way to ensure energy and amount stay paired
-
-            histogram = (
-                ldf.group_by("value")
-                .agg(pl.len().alias("amount")) # pl.len() is the most efficient way to count rows
-                .sort("value")
-            )
-
-            histdf = histogram.collect()
-            # Convert to 2D numpy array: [[energy1, count1], [energy2, count2], ...]
-            hist = histdf.to_numpy() 
-            self.carrier.histogram_finished.emit(hist)
-
-            ldf = ldf.group_by(["x", "y"]).agg([pl.col("value").sum()])
+                    (pl.col(self.ch)).alias("value"))
+            
+            if self.strategy == "max":
+                ldf = ldf.group_by(["x", "y"]).agg([pl.col("value").max()]).sort("value",descending=True)
+            else:
+                ldf = ldf.group_by(["x", "y"]).agg([pl.col("value").mean()]).sort("value",descending=True)
 
             ldf = normalize_data(ldf,"value")
 
             df = ldf.collect()
-            print(df)
 
             arr = df.to_numpy()
 

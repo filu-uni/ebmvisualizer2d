@@ -7,9 +7,9 @@ from __future__ import annotations
 import sys
 from PySide6.QtCore import Qt, Signal, QThread, QDir, QPoint, QPointF, QMargins, QRunnable, QThreadPool
 
-from PySide6.QtGui import QSurfaceFormat, QMovie, QPainter, QColor, QGradient, QLinearGradient
+from PySide6.QtGui import QSurfaceFormat, QMovie, QPainter, QColor, QGradient, QLinearGradient, QPen
 
-from PySide6.QtWidgets import QApplication,QSlider, QHBoxLayout,QVBoxLayout, QWidget, QLabel, QPushButton, QSpinBox, QComboBox, QFileDialog, QStackedLayout
+from PySide6.QtWidgets import QApplication,QSlider, QHBoxLayout, QVBoxLayout, QGridLayout, QWidget, QLabel, QPushButton, QSpinBox, QComboBox, QFileDialog, QStackedLayout
 from PySide6.QtCharts import QChart, QChartView, QBarSet, QAreaSeries, QLineSeries, QBarCategoryAxis, QValueAxis, QScatterSeries
 
 from PySide6.QtSvgWidgets import QSvgWidget
@@ -22,6 +22,8 @@ import numpy as np
 import openglwidget as glw
 import polars as pl
 import os
+from natsort import natsorted
+
 
 class LoadingButton(QPushButton):
     def __init__(self, text, parent=None):
@@ -106,6 +108,7 @@ class RangeSpinBox(QWidget):
 
 class SliderWidget(QWidget):
     valueChanged = Signal()
+    rangeAdjusted = Signal(object)
     released = Signal()
     """A single slider with a name above and value spin box below. If double = True it will be a range slider instead"""
     def __init__(self, name, val_range, init_val,double = False):
@@ -166,6 +169,7 @@ class SliderWidget(QWidget):
         self.slider.blockSignals(False)
     def sendValue(self):
         self.valueChanged.emit()
+        self.rangeAdjusted.emit(self.getValue())
     def finishedEditing(self):
         self.released.emit()
     def setRange(self,new_range):
@@ -174,6 +178,7 @@ class SliderWidget(QWidget):
 
 
 class HistogramPlot(QWidget):
+    rangeChanged = Signal(object)
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
@@ -189,12 +194,23 @@ class HistogramPlot(QWidget):
         fill_color = QColor(52, 152, 219, 150) # Semi-transparent blue
         self.area_series.setColor(fill_color)
         self.area_series.setBorderColor(QColor(52, 152, 219)) # Solid blue border
+        self.area_series.setPen(QPen(Qt.NoPen))
+
+        red_pen = QPen(QColor(230, 57, 70))
+        red_pen.setWidth(2)
+        self.border_line_left = QLineSeries()
+        self.border_line_right = QLineSeries()
+        
+        self.border_line_left.setPen(red_pen)
+        self.border_line_right.setPen(red_pen)
 
         self.chart = QChart()
         self.chart.addSeries(self.area_series)
+        self.chart.addSeries(self.border_line_left)
+        self.chart.addSeries(self.border_line_right)
         self.chart.legend().hide()
         self.chart.layout().setContentsMargins(0, 0, 0, 0)
-        self.chart.setBackgroundVisible(False)
+        self.chart.setBackgroundVisible(True)
 
         # 3. Use ValueAxis for both (faster than CategoryAxis)
         self.axis_x = QValueAxis()
@@ -203,19 +219,26 @@ class HistogramPlot(QWidget):
         self.chart.addAxis(self.axis_y, Qt.AlignLeft)
         self.area_series.attachAxis(self.axis_x)
         self.area_series.attachAxis(self.axis_y)
+        self.border_line_left.attachAxis(self.axis_x)
+        self.border_line_left.attachAxis(self.axis_y)
+        self.border_line_right.attachAxis(self.axis_x)
+        self.border_line_right.attachAxis(self.axis_y)
 
         # Hide visual clutter
         for ax in [self.axis_x, self.axis_y]:
             ax.setVisible(False)
 
         self.view = QChartView(self.chart)
-        self.view.setRenderHint(QPainter.Antialiasing)
+        self.view.setRubberBand(QChartView.HorizontalRubberBand)
+        self.axis_x.rangeChanged.connect(self.RangeChanged)
         self.layout.addWidget(self.view)
 
     def update_data(self, data_array):
         """Expects 2D numpy array [[energy, count], ...]"""
         if data_array is None or len(data_array) == 0:
             return
+
+        self.current_data = data_array
 
         # Prepare points (High speed: QLineSeries.replace is faster than clearing)
         points = [QPointF(row[0], row[1]) for row in data_array]
@@ -224,6 +247,28 @@ class HistogramPlot(QWidget):
         # Update Ranges
         self.axis_x.setRange(data_array[:, 0].min(), data_array[:, 0].max())
         self.axis_y.setRange(0, data_array[:, 1].max() * 1.05)
+        self.rangeChanged.emit((self.axis_x.min(),self.axis_x.max()))
+
+    def RangeChanged(self,vmin,vmax):
+        self.rangeChanged.emit((vmin,vmax))
+    def updateRedBorderLines(self,points):
+        x_left = float(points[0])
+        x_right = float(points[1]) 
+        y_value_left = self.get_y_from_x(x_left)
+        y_value_right = self.get_y_from_x(x_right)
+        left_line = [QPointF(x_left,0.0),QPointF(x_left,y_value_left)]
+        right_line = [QPointF(x_right,0.0),QPointF(x_right,y_value_right)]
+        self.border_line_left.replace(left_line)
+        self.border_line_right.replace(right_line)
+    def get_y_from_x(self, x_val):
+        if hasattr(self, 'current_data'):
+            # Find the index where current_data's X is closest to x_val
+            idx = np.searchsorted(self.current_data[:, 0], x_val)
+            idx = np.clip(idx, 0, len(self.current_data) - 1)
+            return self.current_data[idx, 1]
+        return 0
+        
+        
 
 class Sidebar(QWidget):
     begincalculation = Signal()
@@ -241,10 +286,12 @@ class Sidebar(QWidget):
         self.resolution = 8
         self.pointsize = 3
         self.channel = "mean"
+        self.strategy = "mean"
         self.widgets = dict()
         self.wav_folder = QDir()
         self.arrow_folder = QDir("arrow_files")
         self.arrowpool = QThreadPool(self)
+        self.histopool = QThreadPool(self)
         self.watchdog_file_counter = 0
 
 
@@ -257,12 +304,16 @@ class Sidebar(QWidget):
         self.arrow_button = LoadingButton(parent=self,text="create arrow Files")
 
         self.watchdog = LoadingButton(parent=self,text="deploy watchdog")
+        self.histoFilter = LoadingButton(parent=self,text="calculate interesting frequencies")
 
         self.recalculate = LoadingButton(parent=self,text="Recalculate")
 
 
         self.channelwidget = QComboBox()
         self.channelwidget.addItems(["mean"])
+
+        self.aggregationWidget = QComboBox()
+        self.aggregationWidget.addItems(["mean","max"])
 
         self.resolutionwidget = QSpinBox()
         self.resolutionwidget.setMinimum(1)
@@ -276,11 +327,11 @@ class Sidebar(QWidget):
         #self.pointsizewidget = SliderWidget("PointSize",(1,20),3)
 
         self.histogramWidget = HistogramPlot(self)
-        self.histogramWidget.setMinimumSize(200,300)
+        self.histogramWidget.setMinimumSize(200,250)
         self.histogramWidget.show()
 
         self.layerwidget = SliderWidget("Layers",(1,100),(1,1),double=True)
-        self.energywidget = SliderWidget("Energy",(1,2**15),(1000,4000),double=True)
+        self.energywidget = SliderWidget("Energy",(-1000,2**15),(1000,4000),double=True)
 
         self.layer_display = QLabel()
         self.layer_display.setText("")
@@ -296,9 +347,13 @@ class Sidebar(QWidget):
         self.watchdog.released.connect(self.flip_watchdog)
 
         self.recalculate.released.connect(self.beginRecalculation)
+        self.histoFilter.released.connect(self.filterHistogram)
         self.channelwidget.activated.connect(self.beginRecalculation)
+        self.aggregationWidget.activated.connect(self.beginRecalculation)
         self.pointsizewidget.valueChanged.connect(self.get_pointsize)
         self.energywidget.valueChanged.connect(self.get_energy_range)
+        self.energywidget.rangeAdjusted.connect(self.histogramWidget.updateRedBorderLines)
+        self.histogramWidget.rangeChanged.connect(self.energywidget.setRange)
         self.layerwidget.released.connect(self.beginRecalculation)
         self.resolutionwidget.valueChanged.connect(self.beginRecalculation)
         self.export_button.released.connect(self.export.emit)
@@ -307,22 +362,33 @@ class Sidebar(QWidget):
         layout.addWidget(self.arrow_folder_button)
         layout.addWidget(self.watchdog)
         layout.addWidget(self.arrow_button)
+        layout.addWidget(self.histoFilter)
 
         energyLayout = QVBoxLayout()
         energyLayout.addWidget(self.histogramWidget)
         energyLayout.addWidget(self.energywidget)
         layout.addLayout(energyLayout)
 
-        pointsLayout = QHBoxLayout()
-        pointsLayout.addWidget(self.pointsizewidget)
-        pointsLayout.addWidget(self.resolutionwidget)
-        layout.addLayout(pointsLayout)
+        optionsLayout = QGridLayout()
+        layout.addLayout(optionsLayout)
+        optionsLayout.addWidget(self.pointsizewidget,0,0)
+        optionsLayout.addWidget(QLabel("change the visual Point Size"),0,1)
+        optionsLayout.addWidget(self.resolutionwidget,1,0)
+        optionsLayout.addWidget(QLabel("change how many points are skipped"),1,1)
+        optionsLayout.addWidget(self.channelwidget,2,0)
+        optionsLayout.addWidget(QLabel("which channel should be shown"),2,1)
+        optionsLayout.addWidget(self.aggregationWidget,3,0)
+        optionsLayout.addWidget(QLabel("which aggregation strategy to use"),3,1)
 
-        layout.addWidget(self.channelwidget)
+        
         layout.addWidget(self.layerwidget)
         layout.addWidget(self.layer_display)
-        layout.addWidget(self.recalculate)
-        layout.addWidget(self.export_button)
+        lowest_layout = QHBoxLayout()
+        layout.addLayout(lowest_layout)
+        lowest_layout.addWidget(self.recalculate)
+        lowest_layout.addWidget(self.export_button)
+
+        self.histoFilter.setVisible(False)
 
 
         layout.addStretch()
@@ -378,14 +444,16 @@ class Sidebar(QWidget):
         if self.watchdog.isRunning():
             self.watchdog_task.stop()
             self.watchdog.stop_loading()
+            self.watchdog_file_counter = 0
         else:
+            amount = len(helpers.get_wav_files(self.wav_folder.absolutePath()))
+            self.watchdog_file_counter = amount
             self.watchdog.start_non_blocking_loading()
             self.watchpool = QThreadPool(self)
             self.watchdog_task = helpers.AsyncWatchdogTask(self.wav_folder.absolutePath())
             self.watchdog_task.signals.file_ready.connect(self.create_arrow_file)
             self.watchdog_task.signals.error.connect(lambda e: print(f"Error: {e}"))
 
-            self.watchdog.setText("watching" + self.arrow_folder.absolutePath())
             self.watchpool.start(self.watchdog_task)
 
     def get_energy_range(self):
@@ -402,9 +470,11 @@ class Sidebar(QWidget):
         return self.layer
     def getArrowFolder(self):
         return self.arrow_folder
+    def getStrategy(self):
+        return self.strategy
     def updateHistogram(self,hist):
         self.histogramWidget.update_data(hist)
-        self.energywidget.setRange((hist[0].min(),hist[0].max()))
+        self.energywidget.setRange((hist[:,0].min(),hist[:,0].max()))
    
     def updateLayers(self):
         layers = len(helpers.get_arrow_files(self.arrow_folder.absolutePath()))
@@ -413,14 +483,22 @@ class Sidebar(QWidget):
         self.layerwidget.setValue((lowerbound,layers))
         
 
+    def filterHistogram(self):
+        self.histoFilter.start_loading()
+        files = helpers.get_arrow_files(self.arrow_folder.absolutePath())
+        task = helpers.HistogramFilterTask(self.channel,natsorted(files))
+        task.signals.filteredHistogram.connect(self.histoFilter.stop_loading)
+        self.histopool.start(task)
+
     def beginRecalculation(self):
         self.layer = self.layerwidget.getValue()
         if self.wav_folder.exists():
             wav_folder = helpers.get_wav_files(self.wav_folder.absolutePath())
             if self.layer[1] < len(wav_folder):
-                self.layer_display.setText(str(wav_folder[self.layer[1]].name))
+                self.layer_display.setText(str(wav_folder[self.layer[0]].name) + ", "  + str(wav_folder[self.layer[1]].name))
         self.resolution = self.resolutionwidget.value()
         self.channel = self.channelwidget.currentText()
+        self.strategy = self.aggregationWidget.currentText()
         self.begincalculation.emit()
     def startCalculation(self):
         self.recalculate.start_loading()

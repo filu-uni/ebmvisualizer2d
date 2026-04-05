@@ -64,25 +64,8 @@ out vec4 fragColor;
 void main()
 {
     float t = clamp((v_value - vmin) / (vmax - vmin), 0.0, 1.0);
-    fragColor = texture(colormap, t);
-}
-"""
-FRAGMENT_SHADER = """
-#version 330 core
 
-in float v_value;
-
-uniform float vmin;
-uniform float vmax;
-uniform sampler1D colormap;
-
-out vec4 fragColor;
-
-void main()
-{
-    float t = clamp((v_value - vmin) / (vmax - vmin), 0.0, 1.0);
-
-    if (t < 0.01) {  // treat lowest ~1% as black
+    if (t < 0.001 || t > 0.999) {  // treat lowest ~1% as black
         fragColor = vec4(0.0, 0.0, 0.0, 1.0);
     } else {
         fragColor = texture(colormap, t);
