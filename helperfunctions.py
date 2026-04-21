@@ -67,7 +67,7 @@ def create_histogram_from_arrow_folder(folder_path, ch="mean"):
 
 
 #need to create them sorted after mesh and then x and y
-def create_arrow_from_wav(file_path, number, out_folder="arrow_files", stride=1):
+def create_arrow_from_wav(file_path, number, out_folder="arrow_files", stride=2):
     out_dir = Path(out_folder)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"Layer_{number}.arrow"
@@ -299,12 +299,12 @@ class WatchdogObserver(FileSystemEventHandler):
 
     def on_closed(self, event):
         # IN_CLOSE_WRITE: The file descriptor is released after writing.
-        if not event.is_directory:
+        if not event.is_directory and event.src_path.lower().endswith('.wav'):
             self.signals.file_ready.emit(event.src_path)
 
     def on_moved(self, event):
         # Handle 'Atomic Saves': Temp file is moved to final destination.
-        if not event.is_directory:
+        if not event.is_directory and event.src_path.lower().endswith('.wav'):
             self.signals.file_ready.emit(event.src_path)
 
 class AsyncWatchdogTask(QRunnable):

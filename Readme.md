@@ -6,8 +6,8 @@ Every calculation is done with [polars](https://pola.rs/) or directly through op
 
 ### how does it work
 
-We use arrow files to get the fastest polars speed. When the wav files are converted to arrow files we take the x,y channels and the four sensor channels. The conversion is generally pretty fast but since it isnt running on a seperate thread yet it will probably brick the application for a while depending on the amount of files and file size.
-The theoretical largest file is: (RAM - samplerate * length of file * 12) > 0.
+We use arrow files to get the fastest polars speed. When the wav files are converted to arrow files we take the x,y channels and the four sensor channels.
+The theoretical largest file is: (RAM - samplerate * length of file * 12).
 The is the amount of data which is passed to opengl. The 12 is calculated from bytesize per sample (float32) and the number of channels (3). This implies that we actually take every sample. We can adjust the resolution to reach the desired number.
 
 
@@ -33,18 +33,18 @@ python main.py
 
 ### How to use
 
-It expects arrow files inside the folder: arrow_files
-If you start the Application for the first time press on the "choose wav folder" button.
-After that press "convert to arrow files". As soon as the application is responding again(ill fix that one later)
-you should be able to press the recalculate button. The animation suggests a calculation which takes time.
-Changing channels or layers takes a call to polars while adjusting the energy range only talks to opengl which is basically instant.
+During the Melt:
+    
+    Choose the wav folder where the ebm will send the data.
+    Choose a folder where you want to store the arrow files. This can be any folder and the files can also get deleted afterwards when youre done.
+    Activate the Watchdog. this will monitor the wav file folder for changes and recalculate the image when new wav files appear.
+    If you have to stop the melt, for whatever reason, just leave the watchdog running. There shouldnt be anything to do inside the visualizer for that occasion, just let it observe.
+    The watchdog always picks the last 10 layers to aggregate on top of each other and will overwrite your last input if a file change is detected. Be aware that more than 10 layers can get pretty rough on the memory. its optimized in that regard as much as possible but best to tread lightly and increase the number of skipped points before rendering over 50 layers. Changing the value of anything appart from the energy range and the point size will need recalculation and therefore take a while to compute. 
+Since it hasnt been thoroughly tested during the melting process yet, we only evaluate every second point of the data. This is to ensure memory doesnt become an issue too fast.
 
 
 ### Whats planned
 
-- Addition of Channel options so we can choose the mean of all. Other ideas wellcome.
-- Implementation of a Watchdog. This would enable us to choose a folder which is continually watched. The end goal is to use it during the melt itself.
-- Implement a range slider for layers. The layer slider should be able to work like the energy slider.
 - 3D? well see...
 
 All animations by: [HEnYpHOs](https://www.tumblr.com/ruskyart)
