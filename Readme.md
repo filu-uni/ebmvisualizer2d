@@ -1,5 +1,5 @@
 ## Visualization Software for Wave Files in a Ebm Context.
-![Running Software](running_software.png "Running Software with Copper")
+![Running Software](running_softwarev1.png "Running Software with Copper")
 
 It is specifically designed to run with as few RAM as possible. 
 Every calculation is done with [polars](https://pola.rs/) or directly through opengl.
