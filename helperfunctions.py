@@ -67,7 +67,7 @@ def create_histogram_from_arrow_folder(folder_path, ch="mean"):
 
 
 #need to create them sorted after mesh and then x and y
-def create_arrow_from_wav(file_path, number, out_folder="arrow_files", stride=2):
+def create_arrow_from_wav(file_path, number, out_folder="arrow_files", stride=1):
     out_dir = Path(out_folder)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"Layer_{number}.arrow"
@@ -96,7 +96,7 @@ def create_arrow_from_wav(file_path, number, out_folder="arrow_files", stride=2)
     return out_file
 
 
-def get_df_from_arrow(file, ch="mean", nth=8):
+def get_df_from_arrow(file, ch="mean", nth=4):
     
     file_path = Path(file).absolute()
     
