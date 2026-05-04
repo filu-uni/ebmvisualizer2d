@@ -87,12 +87,23 @@ def get_df_from_arrow(file, ch="all", strategy="median", nth=4):
     file_path = Path(file).absolute()
     ldf = pl.scan_ipc(file_path).gather_every(nth)
 
+
     topo_formulas = {
         "Topo_A": pl.col("channel 4") - pl.col("channel 1"),
         "Topo_B": pl.col("channel 3") - pl.col("channel 2"),
         "Topo_C": pl.col("channel 4") + pl.col("channel 3") - (pl.col("channel 1") + pl.col("channel 2")),
         "Topo_D": pl.col("channel 4") + pl.col("channel 2") - (pl.col("channel 1") + pl.col("channel 1")),
     }
+
+
+    if ch == "mean":
+            # Calculate the horizontal mean across the channel columns for each row
+            return ldf.select([
+                pl.col("x"),
+                pl.col("y"),
+                # This averages the 4 values at the exact same x,y coordinate
+                pl.mean_horizontal(r"^channel \d+$").alias("value").cast(pl.Float32)
+            ])
 
     if ch == "all":
         # Turn channel 1, 2, 3, 4 columns into a single 'value' column
@@ -229,6 +240,7 @@ class DataWorker(QRunnable):
             .to_numpy()
         )
         self.carrier.histogram_finished.emit(hist_arr)
+        del hist_arr
 
         # 3. Aggregate by Coordinate
         # This collapses multiple hits on the same (x,y) into one row
@@ -253,8 +265,8 @@ class DataWorker(QRunnable):
         )
         df = normalize_data(df,"value")
         df = df.collect()
-        print(df)
         self.carrier.finished.emit(df.to_numpy())
+        del df
 
 class ArrowFileCreatorSignals(QObject):
     finishedTask = Signal()
