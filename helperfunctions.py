@@ -126,26 +126,9 @@ def normalize_data(ldf, ch):
     return ldf.select([
         min_max_norm("x").alias("x"), # Overwrite x with normalized x
         min_max_norm("y").alias("y"), # Overwrite y with normalized y
-        pl.col(ch[0]),                # value
-        pl.col(ch[1]),                # amount
+        pl.col(ch).cast(pl.Float32),               
     ])
 
-#def normalize_data(ldf, ch):
-#    # Compute min/max lazily
-#    x_min = pl.col("x").min()
-#    x_max = pl.col("x").max()
-#    y_min = pl.col("y").min()
-#    y_max = pl.col("y").max()
-#
-#    # Add normalized columns lazily
-#    ldf = ldf.with_columns([
-#        ((2 * (pl.col("x") - x_min) / (x_max - x_min)) - 1).alias("x"),
-#        ((2 * (pl.col("y") - y_min) / (y_max - y_min)) - 1).alias("y"),
-#    ])
-#
-#    # Select only relevant columns
-#    ldf = ldf.select(["x", "y", ch[0], ch[1]])
-#    return ldf
 
 class HistogramSignals(QObject):
     filteredHistogram = Signal(object)
@@ -250,18 +233,15 @@ class DataWorker(QRunnable):
         # 3. Aggregate by Coordinate
         # This collapses multiple hits on the same (x,y) into one row
         strategies = {
-            "none": pl.col("value"),
             "max": pl.col("value").max(),
             "median": pl.col("value").median(),
             "mean": pl.col("value").mean(),
-            "amount": pl.len()
+            "std": pl.col("value").std(),
+            "amount": pl.len().alias("value")
         }
         
         selected_agg = strategies.get(self.strategy, strategies["mean"])
-        print(ld.collect())
         # Returns an integer
-        unique_count = ld.select(pl.struct(["x", "y"]).n_unique()).collect().item()
-        print(f"There are {unique_count} unique coordinates.")
 
         df = (
             ld.group_by(["x", "y"])  # This preserves x and y columns
@@ -271,12 +251,9 @@ class DataWorker(QRunnable):
             )
             .sort("value", descending=True)
         )
-        df = normalize_data(df,["value","amount"])
-        print("after normalization")
+        df = normalize_data(df,"value")
         df = df.collect()
-        print(df.select(pl.col("x").max()))
-        count = df.select(pl.struct(["x", "y"]).n_unique()).item()
-        print(count)
+        print(df)
         self.carrier.finished.emit(df.to_numpy())
 
 class ArrowFileCreatorSignals(QObject):

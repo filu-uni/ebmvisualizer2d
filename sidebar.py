@@ -23,6 +23,7 @@ import openglwidget as glw
 import polars as pl
 import os
 from natsort import natsorted
+import pint
 
 
 class LoadingButton(QPushButton):
@@ -293,6 +294,7 @@ class Sidebar(QWidget):
         self.arrowpool = QThreadPool(self)
         self.histopool = QThreadPool(self)
         self.watchdog_file_counter = 0
+        self.Units = pint.UnitRegistry()
 
 
 
@@ -314,7 +316,7 @@ class Sidebar(QWidget):
         
 
         self.aggregationWidget = QComboBox()
-        self.aggregationWidget.addItems(["mean","max","median","amount","none"])
+        self.aggregationWidget.addItems(["mean","max","median","std","amount"])
 
         self.resolutionwidget = QSpinBox()
         self.resolutionwidget.setMinimum(1)
@@ -336,6 +338,9 @@ class Sidebar(QWidget):
 
         self.layer_display = QLabel()
         self.layer_display.setText("")
+        self.position_display = QLabel()
+        self.position_display.setText("")
+        
         
         self.export_button = QPushButton()
         self.export_button.setText("Export to Png")
@@ -354,7 +359,7 @@ class Sidebar(QWidget):
         self.pointsizewidget.valueChanged.connect(self.get_pointsize)
         self.energywidget.valueChanged.connect(self.get_energy_range)
         #broken as of now. not quite sure why though...
-        #self.energywidget.rangeAdjusted.connect(self.histogramWidget.updateRedBorderLines)
+        self.energywidget.rangeAdjusted.connect(self.histogramWidget.updateRedBorderLines)
         self.histogramWidget.rangeChanged.connect(self.energywidget.setRange)
         self.layerwidget.released.connect(self.beginRecalculation)
         self.resolutionwidget.valueChanged.connect(self.beginRecalculation)
@@ -368,6 +373,7 @@ class Sidebar(QWidget):
 
         energyLayout = QVBoxLayout()
         energyLayout.addWidget(self.histogramWidget)
+        energyLayout.addWidget(self.position_display)
         energyLayout.addWidget(self.energywidget)
         layout.addLayout(energyLayout)
 
@@ -459,6 +465,19 @@ class Sidebar(QWidget):
             self.watchdog_task.signals.error.connect(lambda e: print(f"Error: {e}"))
 
             self.watchpool.start(self.watchdog_task)
+
+    def setPositionDisplay(self,pos):
+        # 1. Convert your coordinates to micrometer
+        x_mu = (pos[0] * self.Units.decimeter).to("millimeter")
+        y_mu = (pos[1] * self.Units.decimeter).to("millimeter")
+
+        # 2. Format with 3 decimals and short unit name (~)
+        # .3f ensures 3 decimal places, ~ ensures 'µm' instead of 'micrometer'
+        x_str = f"{x_mu:~.3f}"
+        y_str = f"{y_mu:~.3f}"
+
+        # 3. Update display
+        self.position_display.setText(f"({x_str}, {y_str})")
 
     def get_energy_range(self):
         self.energy_range = self.energywidget.getValue()

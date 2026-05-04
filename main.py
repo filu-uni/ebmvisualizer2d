@@ -45,6 +45,7 @@ class VisualizerTab(QWidget):
         '''Calculation Connections'''
         self.sidebar.begincalculation.connect(self.handle_array_update)
         self.sidebar.export.connect(self.export)
+        self.glwidget.positionChanged.connect(self.sidebar.setPositionDisplay)
         self.setWindowTitle(self.tr("Ebm Visualisation"))
 
     def handle_array_update(self):

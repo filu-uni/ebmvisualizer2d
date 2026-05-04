@@ -65,7 +65,7 @@ void main()
 {
     float t = clamp((v_value - vmin) / (vmax - vmin), 0.0, 1.0);
 
-    if (t < 0) {  // treat lowest ~1% as black
+    if (t < 0.001 || t > 0.999) {  // treat lowest ~1% as black
         fragColor = vec4(0.0, 0.0, 0.0, 1.0);
     } else {
         fragColor = texture(colormap, t);
@@ -91,6 +91,7 @@ def viridis_colormap(n=256):
 
 
 class PointCloud2D(QOpenGLWidget):
+    positionChanged = Signal(object) 
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -113,6 +114,7 @@ class PointCloud2D(QOpenGLWidget):
         self.vao = 0
         self.vbo = 0
         self.lock = Lock()
+        self.setMouseTracking(True)
 
     # ---------- public API ----------
 
@@ -203,22 +205,52 @@ class PointCloud2D(QOpenGLWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.last_pos = event.position()
-
     def mouseMoveEvent(self, event):
-        if self.last_pos is None:
-            return
+        # 1. Get pixel coordinates
+        pos = event.position()
+        
+        # 2. Convert to NDC (-1 to 1)
+        ndc_x = (2.0 * pos.x() / self.width()) - 1.0
+        ndc_y = 1.0 - (2.0 * pos.y() / self.height())
+        
+        # 3. Inverse Transform to World Space
+        # This accounts for your current pan and zoom levels
+        world_x = (ndc_x - self.pan_x) / self.zoom
+        world_y = (ndc_y - self.pan_y) / self.zoom
 
-        dx = event.position().x() - self.last_pos.x()
-        dy = event.position().y() - self.last_pos.y()
+        # This signal now carries the coordinates relative to your DATA
+        self.positionChanged.emit((world_x, world_y))
 
-        self.pan_x += 2.0 * dx / self.width()
-        self.pan_y -= 2.0 * dy / self.height()
+        # --- Existing Panning Logic ---
+        if event.buttons() & Qt.LeftButton and self.last_pos is not None:
+            dx = pos.x() - self.last_pos.x()
+            dy = pos.y() - self.last_pos.y()
 
-        self.last_pos = event.position()
-        self.update()
+            self.pan_x += 2.0 * dx / self.width()
+            self.pan_y -= 2.0 * dy / self.height()
+
+            self.last_pos = pos
+            self.update()
+        elif not (event.buttons() & Qt.LeftButton):
+            # Update last_pos even when not clicking so the next drag starts fresh
+            self.last_pos = pos
+ #   def mouseMoveEvent(self, event):
+ #       self.positionChanged.emit(event.position())
+ #       if self.last_pos is None:
+ #           return
+
+ #       dx = event.position().x() - self.last_pos.x()
+ #       dy = event.position().y() - self.last_pos.y()
+
+ #       self.pan_x += 2.0 * dx / self.width()
+ #       self.pan_y -= 2.0 * dy / self.height()
+
+ #       self.last_pos = event.position()
+ #       self.update()
 
     def mouseReleaseEvent(self, event):
         self.last_pos = None
+
 
     # ---------- internal helpers ----------
     def _make_transform(self):
