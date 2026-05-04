@@ -312,7 +312,7 @@ class Sidebar(QWidget):
 
 
         self.channelwidget = QComboBox()
-        self.channelwidget.addItems(["mean","all"])
+        #self.channelwidget.addItems(["mean","all"])
         
 
         self.aggregationWidget = QComboBox()
@@ -420,6 +420,8 @@ class Sidebar(QWidget):
 
             files = self.arrow_folder.entryInfoList(filters=QDir.Filter.Files,sort=QDir.SortFlag.Name)
             if files:
+                self.channelwidget.clear()
+                self.channelwidget.addItems(["all","mean"])
                 file = files[0].absolutePath()
                 column_names = pl.scan_ipc(file).collect_schema().names()
                 self.channelwidget.addItems(column_names[2:])
