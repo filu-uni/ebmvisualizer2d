@@ -65,7 +65,7 @@ void main()
 {
     float t = clamp((v_value - vmin) / (vmax - vmin), 0.0, 1.0);
 
-    if (t < 0.001 || t > 0.999) {  // treat lowest ~1% as black
+    if (t < 0) {  // treat lowest ~1% as black
         fragColor = vec4(0.0, 0.0, 0.0, 1.0);
     } else {
         fragColor = texture(colormap, t);

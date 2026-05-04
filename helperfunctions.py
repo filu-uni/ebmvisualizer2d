@@ -14,7 +14,7 @@ import polars as pl
 from natsort import natsorted
 from watchdog.events import FileSystemEventHandler, FileClosedEvent
 import time
-
+import polars.selectors as cs
 
 from OpenGL.GL import (
     glClearColor, glClear, GL_COLOR_BUFFER_BIT,
@@ -51,20 +51,6 @@ def get_arrow_files(directory):
     return natsorted(list(base_path.glob("*.arrow")))
 
 
-def create_histogram_from_arrow_folder(folder_path, ch="mean"):
-    folder = Path(folder_path)
-    pattern = str(folder / "*.arrow")
-    
-    hist_df = (
-    pl.scan_ipc(pattern)
-    .select(ch)
-    .group_by(ch)
-    .len()
-    .sort(ch) 
-    .collect()
-    )
-    return hist_df
-
 
 #need to create them sorted after mesh and then x and y
 def create_arrow_from_wav(file_path, number, out_folder="arrow_files", stride=1):
@@ -74,7 +60,7 @@ def create_arrow_from_wav(file_path, number, out_folder="arrow_files", stride=1)
 
     samplerate, data = wavfile.read(file_path)
     
-    values = np.mean([data[::stride,0],data[::stride,1],data[::stride,2],data[::stride,3]],axis=0).astype(np.float32)
+    #values = np.mean([data[::stride,0],data[::stride,1],data[::stride,2],data[::stride,3]],axis=0).astype(np.float32)
 
     df = pl.DataFrame({
         "x": data[::stride, -4].astype(np.float32),
@@ -83,9 +69,11 @@ def create_arrow_from_wav(file_path, number, out_folder="arrow_files", stride=1)
         "channel 2" :data[::stride,1],
         "channel 3" :data[::stride,2],
         "channel 4" :data[::stride,3],
-        "mean" : values
         })
+    
 
+    #df = df.group_by(["x","y"])
+    #df = df.agg(pl.mean("channel 1","channel 2"
     df.write_ipc(out_file)
 
     del data
@@ -95,37 +83,69 @@ def create_arrow_from_wav(file_path, number, out_folder="arrow_files", stride=1)
     print(f"Exported to {out_file}")
     return out_file
 
-
-def get_df_from_arrow(file, ch="mean", nth=4):
-    
+def get_df_from_arrow(file, ch="all", strategy="median", nth=4):
     file_path = Path(file).absolute()
-    
-    ldf = pl.scan_ipc(file_path)
-    
-    if nth > 1:
-        ldf = ldf.gather_every(nth)
-    
-    ldf = ldf.select(["x", "y", ch])
-    
-    return ldf
+    ldf = pl.scan_ipc(file_path).gather_every(nth)
 
-def normalize_data(ldf, ch):
-    # Compute min/max lazily
-    x_min = pl.col("x").min()
-    x_max = pl.col("x").max()
-    y_min = pl.col("y").min()
-    y_max = pl.col("y").max()
+    topo_formulas = {
+        "Topo_A": pl.col("channel 4") - pl.col("channel 1"),
+        "Topo_B": pl.col("channel 3") - pl.col("channel 2"),
+        "Topo_C": pl.col("channel 4") + pl.col("channel 3") - (pl.col("channel 1") + pl.col("channel 2")),
+        "Topo_D": pl.col("channel 4") + pl.col("channel 2") - (pl.col("channel 1") + pl.col("channel 1")),
+    }
 
-    # Add normalized columns lazily
-    ldf = ldf.with_columns([
-        ((2 * (pl.col("x") - x_min) / (x_max - x_min)) - 1).alias("x_norm"),
-        ((2 * (pl.col("y") - y_min) / (y_max - y_min)) - 1).alias("y_norm"),
+    if ch == "all":
+        # Turn channel 1, 2, 3, 4 columns into a single 'value' column
+        return (
+            ldf.unpivot(
+                index=["x", "y"],
+                on=[r"^channel \d+$"],
+                value_name="value"
+            )
+            .select(["x", "y", "value"])
+        )
+    
+    # Otherwise, handle specific Topo or named channels
+    val_expr = topo_formulas.get(ch, pl.col(ch))
+    return ldf.select([
+        pl.col("x"),
+        pl.col("y"),
+        val_expr.alias("value")
     ])
 
-    # Select only relevant columns
-    ldf = ldf.select(["x_norm", "y_norm", ch])
-    return ldf
+def normalize_data(ldf, ch):
+    # ch is expected to be ["value", "amount"]
+    
+    # 1. Define the normalization expression
+    # Using (value - min) / (max - min) * 2 - 1 to get the -1 to 1 range
+    def min_max_norm(col_name):
+        c = pl.col(col_name)
+        return (2 * (c - c.min()) / (c.max() - c.min()) - 1)
 
+    # 2. Apply and select everything at once
+    return ldf.select([
+        min_max_norm("x").alias("x"), # Overwrite x with normalized x
+        min_max_norm("y").alias("y"), # Overwrite y with normalized y
+        pl.col(ch[0]),                # value
+        pl.col(ch[1]),                # amount
+    ])
+
+#def normalize_data(ldf, ch):
+#    # Compute min/max lazily
+#    x_min = pl.col("x").min()
+#    x_max = pl.col("x").max()
+#    y_min = pl.col("y").min()
+#    y_max = pl.col("y").max()
+#
+#    # Add normalized columns lazily
+#    ldf = ldf.with_columns([
+#        ((2 * (pl.col("x") - x_min) / (x_max - x_min)) - 1).alias("x"),
+#        ((2 * (pl.col("y") - y_min) / (y_max - y_min)) - 1).alias("y"),
+#    ])
+#
+#    # Select only relevant columns
+#    ldf = ldf.select(["x", "y", ch[0], ch[1]])
+#    return ldf
 
 class HistogramSignals(QObject):
     filteredHistogram = Signal(object)
@@ -149,7 +169,7 @@ class HistogramFilterTask(QRunnable):
             
 
             hist_list = [ df.select(
-                    (pl.col(self.ch).cast(pl.Float32)).alias("bin"))
+                    (pl.col("value").cast(pl.Float32)).alias("bin"))
                     for df in lazy_plans]
 
             hist_list = [ ( 
@@ -209,64 +229,55 @@ class DataWorker(QRunnable):
         self.strategy = strategy
 
     def run(self):
-            
-            if len(self.files) < 1:
-                return
-            
-            # 1. Create a list of all LazyFrames
-            # This just stores the "instructions" for each file, using almost no RAM
-            lazy_plans = [
-                get_df_from_arrow(file, self.ch, self.nth) 
-                for file in self.files
-            ]
-            
-            #we devide by n since we will add n measurements back on top again
-            n = len(self.files)
+        if not self.files: return
 
-            # 2. Concat them all at once
-            # Polars can now optimize the entire operation globally
-            
-            ldf = pl.concat(lazy_plans,rechunk=True) if n > 1 else lazy_plans[0]
+        # 1. Combine all files into one plan
+        ld = pl.concat([
+            get_df_from_arrow(f, self.ch, self.strategy, self.nth) 
+            for f in self.files
+        ])
 
-            histogram = (
-                ldf.group_by(self.ch)
-                .agg(pl.len().alias("amount")) # pl.len() is the most efficient way to count rows
-                .sort(self.ch)
+        # 2. Histogram (Optional: still groups by the 'value' itself)
+        hist_arr = (
+            ld.group_by("value")
+            .agg(pl.len().alias("count"))
+            .sort("value")
+            .collect()
+            .to_numpy()
+        )
+        self.carrier.histogram_finished.emit(hist_arr)
+
+        # 3. Aggregate by Coordinate
+        # This collapses multiple hits on the same (x,y) into one row
+        strategies = {
+            "none": pl.col("value"),
+            "max": pl.col("value").max(),
+            "median": pl.col("value").median(),
+            "mean": pl.col("value").mean(),
+            "amount": pl.len()
+        }
+        
+        selected_agg = strategies.get(self.strategy, strategies["mean"])
+        print(ld.collect())
+        # Returns an integer
+        unique_count = ld.select(pl.struct(["x", "y"]).n_unique()).collect().item()
+        print(f"There are {unique_count} unique coordinates.")
+
+        df = (
+            ld.group_by(["x", "y"])  # This preserves x and y columns
+            .agg(
+                selected_agg.alias("value"),
+                pl.len().alias("amount") # Count of how many values were at this x,y
             )
-            
-
-            #noise_reduced = histogram.select(
-            #        (pl.col("amount") > 1000).alias("reduced"),
-            #        pl.col(self.ch)
-            #        )
-
-            ldf = ldf.join(histogram, on=self.ch,how="semi")
-    
-            histdf = histogram.collect()
-            # Convert to 2D numpy array: [[energy1, count1], [energy2, count2], ...]
-            hist = histdf.to_numpy()
-            self.carrier.histogram_finished.emit(hist)
-
-            temp = ldf.select(pl.col(self.ch)).collect()
-
-            ldf = ldf.select(
-                    pl.col("x"),
-                    pl.col("y"),
-                    (pl.col(self.ch)).alias("value"))
-            
-            if self.strategy == "max":
-                ldf = ldf.group_by(["x", "y"]).agg([pl.col("value").max()]).sort("value",descending=True)
-            else:
-                ldf = ldf.group_by(["x", "y"]).agg([pl.col("value").mean()]).sort("value",descending=True)
-
-            ldf = normalize_data(ldf,"value")
-
-            df = ldf.collect()
-
-            arr = df.to_numpy()
-
-            self.carrier.finished.emit(arr)
-
+            .sort("value", descending=True)
+        )
+        df = normalize_data(df,["value","amount"])
+        print("after normalization")
+        df = df.collect()
+        print(df.select(pl.col("x").max()))
+        count = df.select(pl.struct(["x", "y"]).n_unique()).item()
+        print(count)
+        self.carrier.finished.emit(df.to_numpy())
 
 class ArrowFileCreatorSignals(QObject):
     finishedTask = Signal()

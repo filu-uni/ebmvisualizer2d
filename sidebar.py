@@ -310,10 +310,11 @@ class Sidebar(QWidget):
 
 
         self.channelwidget = QComboBox()
-        self.channelwidget.addItems(["mean"])
+        self.channelwidget.addItems(["mean","all"])
+        
 
         self.aggregationWidget = QComboBox()
-        self.aggregationWidget.addItems(["mean","max"])
+        self.aggregationWidget.addItems(["mean","max","median","amount","none"])
 
         self.resolutionwidget = QSpinBox()
         self.resolutionwidget.setMinimum(1)
@@ -352,7 +353,8 @@ class Sidebar(QWidget):
         self.aggregationWidget.activated.connect(self.beginRecalculation)
         self.pointsizewidget.valueChanged.connect(self.get_pointsize)
         self.energywidget.valueChanged.connect(self.get_energy_range)
-        self.energywidget.rangeAdjusted.connect(self.histogramWidget.updateRedBorderLines)
+        #broken as of now. not quite sure why though...
+        #self.energywidget.rangeAdjusted.connect(self.histogramWidget.updateRedBorderLines)
         self.histogramWidget.rangeChanged.connect(self.energywidget.setRange)
         self.layerwidget.released.connect(self.beginRecalculation)
         self.resolutionwidget.valueChanged.connect(self.beginRecalculation)
@@ -417,6 +419,8 @@ class Sidebar(QWidget):
                 file = files[0].absolutePath()
                 column_names = pl.scan_ipc(file).collect_schema().names()
                 self.channelwidget.addItems(column_names[2:])
+                if "channel 1" in column_names[2:]:
+                    self.channelwidget.addItems(["Topo_A","Topo_B","Topo_C","Topo_D","all"])
             self.updateLayers()
         else:
             self.arrow_folder_button.setText("Choose Arrow File Folder")
