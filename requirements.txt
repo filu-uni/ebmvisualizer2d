@@ -7,3 +7,4 @@ watchdog
 pyarrow
 natsort
 pyopengl
+pint
