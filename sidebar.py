@@ -24,256 +24,13 @@ import polars as pl
 import os
 from natsort import natsorted
 import pint
+from CustomWidgets import LoadingButton, RangeSpinBox, SliderWidget, HistogramPlot 
 
-
-class LoadingButton(QPushButton):
-    def __init__(self, text, parent=None):
-        super().__init__(text, parent)
         
-        self.original_text = text
-        self.movie = QMovie("loading_bar.gif")
-
-        self.overlay = QLabel(self) 
-        self.overlay.resize(self.size())
-        self.overlay.setMovie(self.movie)
-        self.overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.overlay.hide()
-
-    def resizeEvent(self, event):
-        self.overlay.resize(self.size())
-        super().resizeEvent(event)
-
-    def start_loading(self):
-        self.setText("") 
-        self.overlay.show()
-        self.movie.start()
-        self.setEnabled(False)
-
-    def start_non_blocking_loading(self):
-        self.setText("") 
-        self.overlay.show()
-        self.movie.start()
-    
-    def isRunning(self):
-        return self.movie.state() == QMovie.MovieState.Running
-
-    def stop_loading(self):
-        self.movie.stop()
-        self.overlay.hide()
-        self.setText(self.original_text)
-        self.setEnabled(True)
-
-
-
-
-class RangeSpinBox(QWidget):
-    valueChanged = Signal(object)
-    editingFinished = Signal()
-    def __init__(self,value_range,init_val):
-        super().__init__()
-        self.value = init_val
-        self.layout = QHBoxLayout()
-        self.setLayout(self.layout)
-        
-        self.spinboxmin = QSpinBox()
-        self.spinboxmin.setRange(value_range[0],value_range[1])
-        self.spinboxmin.setValue(init_val[0])
-        self.spinboxmax = QSpinBox()
-        self.spinboxmax.setRange(value_range[0],value_range[1])
-        self.spinboxmax.setValue(init_val[1])
-        
-        self.layout.addWidget(self.spinboxmin)
-        self.layout.addWidget(self.spinboxmax)
-        
-        self.spinboxmin.valueChanged.connect(self.update_value_min)
-        self.spinboxmax.valueChanged.connect(self.update_value_max)
-
-        self.spinboxmin.editingFinished.connect(self.finishedEditing)
-        self.spinboxmax.editingFinished.connect(self.finishedEditing)
-
-    def update_value_min(self,value):
-        self.value = (value,self.value[1])
-        self.valueChanged.emit(self.value)
-    def update_value_max(self,value):
-        self.value = (self.value[0],value)
-        self.valueChanged.emit(self.value)
-    def setRange(self,value_range_min,value_range_max):
-        self.spinboxmin.setRange(value_range_min,value_range_max)
-        self.spinboxmax.setRange(value_range_min,value_range_max)
-    def setValue(self,value):
-        self.spinboxmin.setValue(value[0])
-        self.spinboxmax.setValue(value[1])
-    def finishedEditing(self):
-        self.editingFinished.emit()
-
-class SliderWidget(QWidget):
-    valueChanged = Signal()
-    rangeAdjusted = Signal(object)
-    released = Signal()
-    """A single slider with a name above and value spin box below. If double = True it will be a range slider instead"""
-    def __init__(self, name, val_range, init_val,double = False):
-        super().__init__()
-        
-        self.double = double
-        layout = QVBoxLayout()
-        self.setLayout(layout)
-
-        self.name_label = QLabel(name)
-
-
-        if double:
-            self.slider = QRangeSlider(Qt.Horizontal)
-        else:
-            self.slider =  QSlider(Qt.Horizontal)
-       
-        self.slider.setRange(val_range[0],val_range[1])
-        self.slider.setValue(init_val)
-
-
-        if self.double:
-            self.value_label = RangeSpinBox(val_range,init_val)
-        else:
-            self.value_label = QSpinBox()
-            self.value_label.setValue(init_val)
-            self.value_label.setRange(val_range[0],val_range[1])
-
-        layout.addWidget(self.name_label, alignment=Qt.AlignCenter)
-        layout.addWidget(self.slider)
-        layout.addWidget(self.value_label, alignment=Qt.AlignCenter)
-
-        self.value_label.valueChanged.connect(self.update_slider)
-        self.value_label.valueChanged.connect(self.finishedEditing)
-        self.value_label.editingFinished.connect(self.finishedEditing)
-
-        self.slider.valueChanged.connect(self.update_label)
-        self.slider.valueChanged.connect(self.sendValue)
-        self.slider.sliderReleased.connect(self.finishedEditing)
-
-
-    def getValue(self):
-        return self.slider.value()
-    def setValue(self,value):
-        self.update_label(value)
-        self.update_slider(value)
-        self.released.emit()
-    def update_label(self, value):
-        self.value_label.blockSignals(True)
-        value = value
-        self.value_label.setValue(value)
-        self.value_label.blockSignals(False)
-    def update_slider(self, value):
-        self.slider.blockSignals(True)
-        value = value
-        self.slider.setValue(value)
-        self.valueChanged.emit()
-        self.slider.blockSignals(False)
-    def sendValue(self):
-        self.valueChanged.emit()
-        self.rangeAdjusted.emit(self.getValue())
-    def finishedEditing(self):
-        self.released.emit()
-    def setRange(self,new_range):
-        self.slider.setRange(new_range[0],new_range[1])
-        self.value_label.setRange(new_range[0],new_range[1])
-
-
-class HistogramPlot(QWidget):
-    rangeChanged = Signal(object)
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-
-        # 1. Use QLineSeries for the "outline"
-        self.line_series = QLineSeries()
-        
-        # 2. Wrap it in a QAreaSeries to fill the bottom
-        self.area_series = QAreaSeries(self.line_series)
-        
-        # Styling the fill
-        fill_color = QColor(52, 152, 219, 150) # Semi-transparent blue
-        self.area_series.setColor(fill_color)
-        self.area_series.setBorderColor(QColor(52, 152, 219)) # Solid blue border
-        self.area_series.setPen(QPen(Qt.NoPen))
-
-        red_pen = QPen(QColor(230, 57, 70))
-        red_pen.setWidth(2)
-        self.border_line_left = QLineSeries()
-        self.border_line_right = QLineSeries()
-        
-        self.border_line_left.setPen(red_pen)
-        self.border_line_right.setPen(red_pen)
-
-        self.chart = QChart()
-        self.chart.addSeries(self.area_series)
-        self.chart.addSeries(self.border_line_left)
-        self.chart.addSeries(self.border_line_right)
-        self.chart.legend().hide()
-        self.chart.layout().setContentsMargins(0, 0, 0, 0)
-        self.chart.setBackgroundVisible(True)
-
-        # 3. Use ValueAxis for both (faster than CategoryAxis)
-        self.axis_x = QValueAxis()
-        self.axis_y = QValueAxis()
-        self.chart.addAxis(self.axis_x, Qt.AlignBottom)
-        self.chart.addAxis(self.axis_y, Qt.AlignLeft)
-        self.area_series.attachAxis(self.axis_x)
-        self.area_series.attachAxis(self.axis_y)
-        self.border_line_left.attachAxis(self.axis_x)
-        self.border_line_left.attachAxis(self.axis_y)
-        self.border_line_right.attachAxis(self.axis_x)
-        self.border_line_right.attachAxis(self.axis_y)
-
-        # Hide visual clutter
-        for ax in [self.axis_x, self.axis_y]:
-            ax.setVisible(False)
-
-        self.view = QChartView(self.chart)
-        self.view.setRubberBand(QChartView.HorizontalRubberBand)
-        self.axis_x.rangeChanged.connect(self.RangeChanged)
-        self.layout.addWidget(self.view)
-
-    def update_data(self, data_array):
-        """Expects 2D numpy array [[energy, count], ...]"""
-        if data_array is None or len(data_array) == 0:
-            return
-
-        self.current_data = data_array
-
-        # Prepare points (High speed: QLineSeries.replace is faster than clearing)
-        points = [QPointF(row[0], row[1]) for row in data_array]
-        self.line_series.replace(points)
-
-        # Update Ranges
-        self.axis_x.setRange(data_array[:, 0].min(), data_array[:, 0].max())
-        self.axis_y.setRange(0, data_array[:, 1].max() * 1.05)
-        self.rangeChanged.emit((self.axis_x.min(),self.axis_x.max()))
-
-    def RangeChanged(self,vmin,vmax):
-        self.rangeChanged.emit((vmin,vmax))
-    def updateRedBorderLines(self,points):
-        x_left = float(points[0])
-        x_right = float(points[1]) 
-        y_value_left = self.get_y_from_x(x_left)
-        y_value_right = self.get_y_from_x(x_right)
-        left_line = [QPointF(x_left,0.0),QPointF(x_left,y_value_left)]
-        right_line = [QPointF(x_right,0.0),QPointF(x_right,y_value_right)]
-        self.border_line_left.replace(left_line)
-        self.border_line_right.replace(right_line)
-    def get_y_from_x(self, x_val):
-        if hasattr(self, 'current_data'):
-            # Find the index where current_data's X is closest to x_val
-            idx = np.searchsorted(self.current_data[:, 0], x_val)
-            idx = np.clip(idx, 0, len(self.current_data) - 1)
-            return self.current_data[idx, 1]
-        return 0
-        
-        
-
 class Sidebar(QWidget):
     begincalculation = Signal()
     energyChanged = Signal(object)
+    amountChanged = Signal(object)
     pointsizeChanged = Signal(object)
     export = Signal()
     """Vertical sidebar with multiple sliders"""
@@ -284,6 +41,7 @@ class Sidebar(QWidget):
         self.setLayout(layout)
         self.layer = (1,1)
         self.energy_range = (1000,4000)
+        self.amount_range = (-1000,10000)
         self.resolution = 8
         self.pointsize = 3
         self.channel = "mean"
@@ -312,22 +70,18 @@ class Sidebar(QWidget):
 
 
         self.channelwidget = QComboBox()
-        #self.channelwidget.addItems(["mean","all"])
         
 
         self.aggregationWidget = QComboBox()
-        self.aggregationWidget.addItems(["mean","max","median","std","amount"])
+        self.aggregationWidget.addItems(["mean","max","median","std"])
 
         self.resolutionwidget = QSpinBox()
         self.resolutionwidget.setMinimum(1)
         self.resolutionwidget.setValue(4)
-        
-        #self.resolutionwidget = SliderWidget("Resolution",(1,40),8)
 
         self.pointsizewidget = QSpinBox()
         self.pointsizewidget.setMinimum(1)
         self.pointsizewidget.setValue(3)
-        #self.pointsizewidget = SliderWidget("PointSize",(1,20),3)
 
         self.histogramWidget = HistogramPlot(self)
         self.histogramWidget.setMinimumSize(200,250)
@@ -335,6 +89,7 @@ class Sidebar(QWidget):
 
         self.layerwidget = SliderWidget("Layers",(1,100),(1,1),double=True)
         self.energywidget = SliderWidget("Energy",(-1000,2**15),(1000,4000),double=True)
+        self.amountwidget = SliderWidget("Amount",(-1000,100000),(0,1000),double=True,orientation=Qt.Vertical)
 
         self.layer_display = QLabel()
         self.layer_display.setText("")
@@ -344,7 +99,6 @@ class Sidebar(QWidget):
         
         self.export_button = QPushButton()
         self.export_button.setText("Export to Png")
-
 
 
         self.wav_folder_button.released.connect(self.choose_wav_folder)
@@ -358,8 +112,12 @@ class Sidebar(QWidget):
         self.aggregationWidget.activated.connect(self.beginRecalculation)
         self.pointsizewidget.valueChanged.connect(self.get_pointsize)
         self.energywidget.valueChanged.connect(self.get_energy_range)
-        self.energywidget.rangeAdjusted.connect(self.histogramWidget.updateRedBorderLines)
-        self.histogramWidget.rangeChanged.connect(self.energywidget.setRange)
+        self.energywidget.rangeAdjusted.connect(self.histogramWidget.updateRedBorderLinesEnergy)
+        self.amountwidget.rangeAdjusted.connect(self.histogramWidget.updateRedBorderLinesAmount)
+        self.amountwidget.valueChanged.connect(self.get_amount_range)
+        self.amountwidget.valueChanged.connect(self.get_amount_range)
+        self.histogramWidget.x_rangeChanged.connect(self.energywidget.setRange)
+        self.histogramWidget.y_rangeChanged.connect(self.amountwidget.setRange)
         self.layerwidget.released.connect(self.beginRecalculation)
         self.resolutionwidget.valueChanged.connect(self.beginRecalculation)
         self.export_button.released.connect(self.export.emit)
@@ -370,10 +128,11 @@ class Sidebar(QWidget):
         layout.addWidget(self.arrow_button)
         layout.addWidget(self.histoFilter)
 
-        energyLayout = QVBoxLayout()
-        energyLayout.addWidget(self.histogramWidget)
-        energyLayout.addWidget(self.position_display)
-        energyLayout.addWidget(self.energywidget)
+        energyLayout = QGridLayout()
+        energyLayout.addWidget(self.histogramWidget,0,0)
+        energyLayout.addWidget(self.position_display,0,0,Qt.AlignTop | Qt.AlignLeft)
+        energyLayout.addWidget(self.energywidget,1,0,1,2)
+        energyLayout.addWidget(self.amountwidget,0,1)
         layout.addLayout(energyLayout)
 
         optionsLayout = QGridLayout()
@@ -482,6 +241,9 @@ class Sidebar(QWidget):
     def get_energy_range(self):
         self.energy_range = self.energywidget.getValue()
         self.energyChanged.emit(self.energy_range)
+    def get_amount_range(self):
+        self.amount_range = self.amountwidget.getValue()
+        self.amountChanged.emit(self.amount_range)
     def get_pointsize(self):
         self.pointsize = self.pointsizewidget.value()
         self.pointsizeChanged.emit(self.pointsize)
@@ -498,6 +260,10 @@ class Sidebar(QWidget):
     def updateHistogram(self,hist):
         self.histogramWidget.update_data(hist)
         self.energywidget.setRange((hist[:,0].min(),hist[:,0].max()))
+        self.amountwidget.setRange((hist[:,1].min(),hist[:,1].max()))
+        print(hist[:,1].min())
+        print(hist[:,1].max())
+
    
     def updateLayers(self):
         layers = len(helpers.get_arrow_files(self.arrow_folder.absolutePath()))

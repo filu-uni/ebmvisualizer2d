@@ -35,12 +35,15 @@ class VisualizerTab(QWidget):
         self.glwidget.setMinimumSize(700, 700)
         self.glwidget.set_point_size(3.0)
         self.glwidget.set_value_range((0,2**15))
+        self.glwidget.set_amount_range((-1,100000))
+
 
         mainLayout.addWidget(self.glwidget)
         mainLayout.addWidget(self.sidebar)
         
         '''Draw Connections'''
         self.sidebar.energyChanged.connect(self.glwidget.set_value_range)
+        self.sidebar.amountChanged.connect(self.glwidget.set_amount_range)
         self.sidebar.pointsizeChanged.connect(self.glwidget.set_point_size)
         '''Calculation Connections'''
         self.sidebar.begincalculation.connect(self.handle_array_update)

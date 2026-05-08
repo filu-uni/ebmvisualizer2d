@@ -138,6 +138,7 @@ def normalize_data(ldf, ch):
         min_max_norm("x").alias("x"), # Overwrite x with normalized x
         min_max_norm("y").alias("y"), # Overwrite y with normalized y
         pl.col(ch).cast(pl.Float32),               
+        pl.col("amount").cast(pl.Float32)
     ])
 
 
@@ -249,7 +250,6 @@ class DataWorker(QRunnable):
             "median": pl.col("value").median(),
             "mean": pl.col("value").mean(),
             "std": pl.col("value").std(),
-            "amount": pl.len().alias("value")
         }
         
         selected_agg = strategies.get(self.strategy, strategies["mean"])

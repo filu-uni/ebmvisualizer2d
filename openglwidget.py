@@ -32,31 +32,33 @@ VERTEX_SHADER = """
 
 layout (location = 0) in vec2 in_pos;
 layout (location = 1) in float in_value;
+layout (location = 2) in float in_amount;
 
 uniform mat4 u_transform;
 uniform float u_pointSize;
 
 out float v_value;
+out float v_amount;
 
 void main()
 {
     gl_Position = u_transform * vec4(in_pos, 0.0, 1.0);
     gl_PointSize = u_pointSize;
     v_value = in_value;
+    v_amount = in_amount;
 
-// Bypass the transform matrix for a moment
-//    gl_Position = vec4(in_pos, 0.0, 1.0);
-//    gl_PointSize = u_pointSize;
-//    v_value = in_value;
 }
 """
 FRAGMENT_SHADER = """
 #version 330 core
 
 in float v_value;
+in float v_amount;
 
 uniform float vmin;
 uniform float vmax;
+uniform float amin;
+uniform float amax;
 uniform sampler1D colormap;
 
 out vec4 fragColor;
@@ -64,8 +66,9 @@ out vec4 fragColor;
 void main()
 {
     float t = clamp((v_value - vmin) / (vmax - vmin), 0.0, 1.0);
+    float a = clamp((v_amount - amin) / (amax - amin), 0.0, 1.0);
 
-    if (t < 0.001 || t > 0.999) {  // treat lowest ~1% as black
+    if (t < 0.001 || t > 0.999 || v_amount < amin || v_amount > amax) {  // treat lowest and highest ~1% as black
         fragColor = vec4(0.0, 0.0, 0.0, 1.0);
     } else {
         fragColor = texture(colormap, t);
@@ -106,9 +109,10 @@ class PointCloud2D(QOpenGLWidget):
 
         # rendering options
         self.point_size = 1.0
-        self.resolution = 10
         self.vmin = 0.0
         self.vmax = 32767.0
+        self.amin = -1.0
+        self.amax = 100000.0
         self.program = 0
         self.u_transform = None
         self.vao = 0
@@ -119,7 +123,7 @@ class PointCloud2D(QOpenGLWidget):
     # ---------- public API ----------
 
     def set_points(self, data: np.ndarray):
-        """data shape: (N, 3) -> x, y, value"""
+        """data shape: (N, 4) -> x, y, value, amount"""
         with self.lock:
             self.data = data.astype(np.float32)
             self.point_count = len(data)
@@ -138,6 +142,10 @@ class PointCloud2D(QOpenGLWidget):
         self.vmax = float(value_range[1])
         self.update()
 
+    def set_amount_range(self, amount_range):
+        self.amin = float(amount_range[0])
+        self.amax = float(amount_range[1])
+        self.update()
     # ---------- Qt / OpenGL ----------
 
     def initializeGL(self):
@@ -147,7 +155,6 @@ class PointCloud2D(QOpenGLWidget):
         self.vao = glGenVertexArrays(1)
         self.vbo = glGenBuffers(1)
 
-        # CRITICAL: If these are 0, the driver failed to provide a buffer
 
         glClearColor(0, 0, 0, 1)
         self.program = self._create_program()
@@ -176,10 +183,94 @@ class PointCloud2D(QOpenGLWidget):
         glUniform1f(self.u_pointSize, self.point_size)
         glUniform1f(self.u_vmin, self.vmin)
         glUniform1f(self.u_vmax, self.vmax)
+        glUniform1f(self.u_amin, self.amin)
+        glUniform1f(self.u_amax, self.amax)
 
         glDrawArrays(GL_POINTS, 0, self.point_count)
 
+
+    # ---------- internal helpers ----------
+    def _make_transform(self):
+        # This is a standard 4x4 Identity matrix modified for 2D pan/zoom
+        # We use Column-Major layout here so we can use GL_FALSE
+        return np.array([
+            [self.zoom, 0,         0, 0],
+            [0,         self.zoom, 0, 0],
+            [0,         0,         1, 0],
+            [self.pan_x, self.pan_y, 0, 1]
+        ], dtype=np.float32)
+
+    def _upload_data(self):
+        if self.data is None:
+            return
+        self.makeCurrent()
+        glBindVertexArray(self.vao)
+        
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
+        # Ensure data is 32-bit floats
+        glBufferData(GL_ARRAY_BUFFER, self.data.nbytes, self.data, GL_STATIC_DRAW)
+
+        # Stride is 16 bytes: [x(4), y(4), val(4), amount(4)] amount could be int but im too stupid
+        # Location 0: x, y
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(0))
+        glEnableVertexAttribArray(0)
+
+        # Location 1: value
+        glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(8))
+        glEnableVertexAttribArray(1)
+
+        # Location 2: amount
+        glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(12))
+        glEnableVertexAttribArray(2)
+        
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        glBindVertexArray(0)
+
+    def _create_colormap(self):
+        self.cmap_tex = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_1D, self.cmap_tex)
+
+        cmap = viridis_colormap(256)
+
+        glTexImage1D(
+            GL_TEXTURE_1D, 0, GL_RGBA32F,
+            256, 0, GL_RGBA, GL_FLOAT, cmap
+        )
+
+        glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+
+        glUseProgram(self.program)
+        glUniform1i(glGetUniformLocation(self.program, "colormap"), 0)
+
+    def _create_program(self):
+
+        vs = helpers.compile_shader(VERTEX_SHADER, GL_VERTEX_SHADER)
+        fs = helpers.compile_shader(FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
+        prog = glCreateProgram()
+        glAttachShader(prog, vs)
+        glAttachShader(prog, fs)
+        glLinkProgram(prog)
+
+        if not glGetProgramiv(prog, GL_LINK_STATUS):
+            raise RuntimeError(glGetProgramInfoLog(prog).decode())
+
+        glDeleteShader(vs)
+        glDeleteShader(fs)
+
+        return prog
+
+    def _get_uniforms(self):
+        self.u_transform = glGetUniformLocation(self.program, "u_transform")
+        self.u_pointSize = glGetUniformLocation(self.program, "u_pointSize")
+        self.u_vmin = glGetUniformLocation(self.program, "vmin")
+        self.u_vmax = glGetUniformLocation(self.program, "vmax")
+        self.u_amin = glGetUniformLocation(self.program, "amin")
+        self.u_amax = glGetUniformLocation(self.program, "amax")
+
     # ---------- mouse interaction ----------
+
+
 
     def wheelEvent(self, event):
         # 1. Get mouse position in widget pixels
@@ -234,96 +325,10 @@ class PointCloud2D(QOpenGLWidget):
         elif not (event.buttons() & Qt.LeftButton):
             # Update last_pos even when not clicking so the next drag starts fresh
             self.last_pos = pos
- #   def mouseMoveEvent(self, event):
- #       self.positionChanged.emit(event.position())
- #       if self.last_pos is None:
- #           return
-
- #       dx = event.position().x() - self.last_pos.x()
- #       dy = event.position().y() - self.last_pos.y()
-
- #       self.pan_x += 2.0 * dx / self.width()
- #       self.pan_y -= 2.0 * dy / self.height()
-
- #       self.last_pos = event.position()
- #       self.update()
 
     def mouseReleaseEvent(self, event):
         self.last_pos = None
 
-
-    # ---------- internal helpers ----------
-    def _make_transform(self):
-        # This is a standard 4x4 Identity matrix modified for 2D pan/zoom
-        # We use Column-Major layout here so we can use GL_FALSE
-        return np.array([
-            [self.zoom, 0,         0, 0],
-            [0,         self.zoom, 0, 0],
-            [0,         0,         1, 0],
-            [self.pan_x, self.pan_y, 0, 1]
-        ], dtype=np.float32)
-
-    def _upload_data(self):
-        if self.data is None:
-            return
-        self.makeCurrent()
-        glBindVertexArray(self.vao)
-        
-        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
-        # Ensure data is 32-bit floats
-        glBufferData(GL_ARRAY_BUFFER, self.data.nbytes, self.data, GL_STATIC_DRAW)
-
-        # Stride is 12 bytes: [x(4), y(4), val(4)]
-        # Location 0: x, y
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
-        glEnableVertexAttribArray(0)
-
-        # Location 1: value
-        glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(8))
-        glEnableVertexAttribArray(1)
-        
-        glBindBuffer(GL_ARRAY_BUFFER, 0)
-        glBindVertexArray(0)
-
-    def _create_colormap(self):
-        self.cmap_tex = glGenTextures(1)
-        glBindTexture(GL_TEXTURE_1D, self.cmap_tex)
-
-        cmap = viridis_colormap(256)
-
-        glTexImage1D(
-            GL_TEXTURE_1D, 0, GL_RGBA32F,
-            256, 0, GL_RGBA, GL_FLOAT, cmap
-        )
-
-        glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-
-        glUseProgram(self.program)
-        glUniform1i(glGetUniformLocation(self.program, "colormap"), 0)
-
-    def _create_program(self):
-
-        vs = helpers.compile_shader(VERTEX_SHADER, GL_VERTEX_SHADER)
-        fs = helpers.compile_shader(FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
-        prog = glCreateProgram()
-        glAttachShader(prog, vs)
-        glAttachShader(prog, fs)
-        glLinkProgram(prog)
-
-        if not glGetProgramiv(prog, GL_LINK_STATUS):
-            raise RuntimeError(glGetProgramInfoLog(prog).decode())
-
-        glDeleteShader(vs)
-        glDeleteShader(fs)
-
-        return prog
-
-    def _get_uniforms(self):
-        self.u_transform = glGetUniformLocation(self.program, "u_transform")
-        self.u_pointSize = glGetUniformLocation(self.program, "u_pointSize")
-        self.u_vmin = glGetUniformLocation(self.program, "vmin")
-        self.u_vmax = glGetUniformLocation(self.program, "vmax")
     def __del__(self):
         # This "empty" destructor prevents PyOpenGL from 
         # trying to call glDelete* during Python shutdown.
