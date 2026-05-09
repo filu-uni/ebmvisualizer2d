@@ -80,6 +80,7 @@ class VisualizerTab(QWidget):
 
     def on_data_received(self, arr):
         arr = np.ascontiguousarray(arr)
+        self.sidebar.amountwidget.setRange((arr[:,3].min(),arr[:,3].max()))
         self.glwidget.set_points(arr)
         self.sidebar.finishCalculation()
 

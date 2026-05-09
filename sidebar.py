@@ -76,8 +76,8 @@ class Sidebar(QWidget):
         self.aggregationWidget.addItems(["mean","max","median","std"])
 
         self.resolutionwidget = QSpinBox()
-        self.resolutionwidget.setMinimum(1)
-        self.resolutionwidget.setValue(4)
+        self.resolutionwidget.setMinimum(0)
+        self.resolutionwidget.setValue(3)
 
         self.pointsizewidget = QSpinBox()
         self.pointsizewidget.setMinimum(1)
@@ -89,7 +89,7 @@ class Sidebar(QWidget):
 
         self.layerwidget = SliderWidget("Layers",(1,100),(1,1),double=True)
         self.energywidget = SliderWidget("Energy",(-1000,2**15),(1000,4000),double=True)
-        self.amountwidget = SliderWidget("Amount",(-1000,100000),(0,1000),double=True,orientation=Qt.Vertical)
+        self.amountwidget = SliderWidget("Amount",(-1000,100000),(0,1000),double=True)
 
         self.layer_display = QLabel()
         self.layer_display.setText("")
@@ -113,11 +113,10 @@ class Sidebar(QWidget):
         self.pointsizewidget.valueChanged.connect(self.get_pointsize)
         self.energywidget.valueChanged.connect(self.get_energy_range)
         self.energywidget.rangeAdjusted.connect(self.histogramWidget.updateRedBorderLinesEnergy)
-        self.amountwidget.rangeAdjusted.connect(self.histogramWidget.updateRedBorderLinesAmount)
-        self.amountwidget.valueChanged.connect(self.get_amount_range)
+        #self.amountwidget.rangeAdjusted.connect(self.histogramWidget.updateRedBorderLinesAmount)
         self.amountwidget.valueChanged.connect(self.get_amount_range)
         self.histogramWidget.x_rangeChanged.connect(self.energywidget.setRange)
-        self.histogramWidget.y_rangeChanged.connect(self.amountwidget.setRange)
+        #self.histogramWidget.y_rangeChanged.connect(self.amountwidget.setRange)
         self.layerwidget.released.connect(self.beginRecalculation)
         self.resolutionwidget.valueChanged.connect(self.beginRecalculation)
         self.export_button.released.connect(self.export.emit)
@@ -128,23 +127,25 @@ class Sidebar(QWidget):
         layout.addWidget(self.arrow_button)
         layout.addWidget(self.histoFilter)
 
+
+
         energyLayout = QGridLayout()
-        energyLayout.addWidget(self.histogramWidget,0,0)
-        energyLayout.addWidget(self.position_display,0,0,Qt.AlignTop | Qt.AlignLeft)
+        energyLayout.addWidget(self.histogramWidget,0,0,1,2)
+        energyLayout.addWidget(self.position_display,0,1,Qt.AlignTop | Qt.AlignRight)
         energyLayout.addWidget(self.energywidget,1,0,1,2)
-        energyLayout.addWidget(self.amountwidget,0,1)
+        energyLayout.addWidget(self.amountwidget,2,0,1,2)
         layout.addLayout(energyLayout)
 
         optionsLayout = QGridLayout()
         layout.addLayout(optionsLayout)
         optionsLayout.addWidget(self.pointsizewidget,0,0)
-        optionsLayout.addWidget(QLabel("change the visual Point Size"),0,1)
-        optionsLayout.addWidget(self.resolutionwidget,1,0)
-        optionsLayout.addWidget(QLabel("change how many points are skipped"),1,1)
-        optionsLayout.addWidget(self.channelwidget,2,0)
-        optionsLayout.addWidget(QLabel("which channel should be shown"),2,1)
-        optionsLayout.addWidget(self.aggregationWidget,3,0)
-        optionsLayout.addWidget(QLabel("which aggregation strategy to use"),3,1)
+        optionsLayout.addWidget(QLabel("visual Point Size"),0,1)
+        optionsLayout.addWidget(self.resolutionwidget,0,2)
+        optionsLayout.addWidget(QLabel("skipped points"),0,3)
+        optionsLayout.addWidget(self.channelwidget,1,0)
+        optionsLayout.addWidget(QLabel("channel"),1,1)
+        optionsLayout.addWidget(self.aggregationWidget,1,2)
+        optionsLayout.addWidget(QLabel("aggregation strategy"),1,3)
 
         
         layout.addWidget(self.layerwidget)
@@ -260,9 +261,6 @@ class Sidebar(QWidget):
     def updateHistogram(self,hist):
         self.histogramWidget.update_data(hist)
         self.energywidget.setRange((hist[:,0].min(),hist[:,0].max()))
-        self.amountwidget.setRange((hist[:,1].min(),hist[:,1].max()))
-        print(hist[:,1].min())
-        print(hist[:,1].max())
 
    
     def updateLayers(self):

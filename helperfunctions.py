@@ -205,7 +205,6 @@ class HistogramFilterTask(QRunnable):
             histogram = hist.to_numpy()
 
             self.signals.filteredHistogram.emit(histogram)
-            print(histogram)
     
 
 
@@ -217,7 +216,7 @@ class DataWorker(QRunnable):
 
     def __init__(self, nth, ch, files, strategy="mean"):
         super().__init__()
-        self.nth = nth
+        self.nth = nth + 1
         self.ch = ch
         self.files = files
         self.carrier = DataCarriage()
